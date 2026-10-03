@@ -1,0 +1,25 @@
+"""Provider ports (protocols). Concrete adapters live in submodules; mocks in ``mocks``."""
+
+from social_growth_agent.providers.llm import (
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    LLMSettings,
+    StructuredOutputStrategy,
+)
+from social_growth_agent.providers.social import (
+    SocialAnalyticsProvider,
+    SocialPublisher,
+    SocialResearchProvider,
+)
+
+__all__ = [
+    "LLMProvider",
+    "LLMRequest",
+    "LLMResponse",
+    "LLMSettings",
+    "SocialAnalyticsProvider",
+    "SocialPublisher",
+    "SocialResearchProvider",
+    "StructuredOutputStrategy",
+]

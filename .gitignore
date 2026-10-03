@@ -1,0 +1,49 @@
+# Secrets and local configuration (only .env.example is tracked)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.crt
+credentials*.json
+secrets*.json
+service-account*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tool caches and reports
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Local checkpoint / database files
+*.sqlite
+*.sqlite3
+*.db
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
