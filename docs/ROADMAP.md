@@ -18,17 +18,22 @@ Each phase ends with a working, tested system. Scope stays X-only until the loop
 - Opt-in live demo and test (`RUN_LIVE_LLM_TESTS=1`).
 - **Exit:** met for the deterministic suite. Still open: a labelled evaluation set and a threshold on real-model critic agreement (carried into Phase 3).
 
-## Phase 3: Research provider and X integration
-- X API research adapter (search, account timelines) behind `SocialResearchProvider`.
-- `enough_signal?` routing with a bounded broaden-research loop.
-- Labelled critic eval set run against the real model; cost per run reported from `LLMCall`s.
-- Rate-limit handling mapped to `TransientProviderError`.
-- **Exit:** research runs against live X data with recorded fixtures for tests.
+## Phase 3: Real X research with provenance (done)
+- `XResearchProvider` behind `SocialResearchProvider`: X API v2 recent search over `httpx`, app-only Bearer token, minimal fields, normalized `SourcePost`s.
+- Retrieval split from interpretation: a `retrieve` node feeds the Research Agent; a research LLM retry never re-fetches.
+- Provenance: findings cite `evidence_source_ids` (`x_<id>`), validated against the supplied set; fabricated ids fail the run.
+- Cost control: `X_MAX_RESULTS_PER_QUERY` (10), `X_MAX_QUERIES_PER_RUN` (1) caps retrieval attempts, no pagination; `ResearchFetch` records requests, post and user reads. No prices in code.
+- Failures mapped to domain errors with categories; HTTP 429 is recorded with its reset time and never retried or slept on.
+- Deterministic limitations (small sample, missing impressions, synthetic data); research prompt separates observation, hypothesis and causal claim.
+- Opt-in live demo and test (`RUN_LIVE_X_TESTS=1`). Mock stays the default research provider.
+- **Exit:** met offline (165 tests, no credentials). Still open: the first live X run, the `enough_signal?` broaden loop, account timelines, the labelled critic eval set and cost per run (moved to Phase 4 below).
 
 ## Phase 4: Human-in-the-loop persistence and resume
-- Postgres checkpointer; SQLAlchemy models for runs, candidates, critiques and decisions.
+- Validate Phase 2/3 live paths once with real keys; fix anything real-model or real-X specific.
+- Postgres checkpointer; SQLAlchemy models for runs, candidates, critiques, decisions, LLM calls and research fetches.
 - API: start run, list pending reviews, submit decision, get run.
 - Regenerate-with-reviewer-notes loop (edit + mandatory re-critique already exists).
+- Carried over: `enough_signal?` broaden-research loop, labelled critic eval set, cost per run from `LLMCall` and `ResearchFetch` counts against a configurable price table outside business logic.
 - **Exit:** a run survives a process restart between pause and resume.
 
 ## Phase 5: Publishing

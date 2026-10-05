@@ -1,8 +1,9 @@
-"""Builds the configured LLM provider. There is deliberately no automatic fallback:
-if 'openai' is configured and cannot be built, startup fails."""
+"""Builds the configured providers. There is deliberately no automatic fallback:
+if 'openai' or 'x' is configured and cannot be built, startup fails."""
 
 from social_growth_agent.config import AppSettings
 from social_growth_agent.providers.llm import LLMProvider
+from social_growth_agent.providers.social import SocialResearchProvider
 
 
 def build_llm_provider(settings: AppSettings) -> LLMProvider:
@@ -14,4 +15,19 @@ def build_llm_provider(settings: AppSettings) -> LLMProvider:
 
     return OpenAIProvider.from_api_key(
         settings.openai_api_key, timeout_seconds=settings.llm_timeout_seconds
+    )
+
+
+def build_research_provider(settings: AppSettings) -> SocialResearchProvider:
+    if settings.research_provider == "mock":
+        from social_growth_agent.providers.mocks import MockResearchProvider
+
+        return MockResearchProvider()
+    from social_growth_agent.providers.x import XResearchProvider
+
+    return XResearchProvider.from_token(
+        settings.x_bearer_token,
+        timeout_seconds=settings.x_timeout_seconds,
+        max_results_per_query=settings.x_max_results_per_query,
+        max_queries_per_run=settings.x_max_queries_per_run,
     )

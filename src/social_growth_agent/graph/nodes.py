@@ -7,10 +7,11 @@ Nodes contain no prompt text and make no routing decisions; routing lives in
 from langgraph.types import interrupt
 
 from social_growth_agent.agents import ContentAgent, CriticAgent, GenerationContext, ResearchAgent
-from social_growth_agent.errors import InvalidReviewError
+from social_growth_agent.errors import InsufficientSignalError, InvalidReviewError
 from social_growth_agent.graph.dependencies import Dependencies
 from social_growth_agent.graph.state import GraphState, StateUpdate
 from social_growth_agent.models import (
+    ResearchSource,
     ReviewAction,
     ReviewDecision,
     ReviewRequest,
@@ -18,7 +19,7 @@ from social_growth_agent.models import (
     RunError,
     RunStatus,
 )
-from social_growth_agent.policies import edited_candidate
+from social_growth_agent.policies import default_research_query, edited_candidate
 
 _STATUS_BY_ACTION = {
     ReviewAction.APPROVE: RunStatus.APPROVED,
@@ -30,14 +31,44 @@ _STATUS_BY_ACTION = {
 class WorkflowNodes:
     def __init__(self, deps: Dependencies) -> None:
         settings = deps.agent_settings
-        self._research = ResearchAgent(
-            deps.llm_for("research"), deps.research_provider, settings.research
-        )
+        self._research_provider = deps.research_provider
+        self._research = ResearchAgent(deps.llm_for("research"), settings.research)
         self._content = ContentAgent(deps.llm_for("content"), settings.content)
         self._critic = CriticAgent(deps.llm_for("critic"), settings.critic)
 
+    def retrieve(self, state: GraphState) -> StateUpdate:
+        """Retrieval only: fetch posts for the run's query. No LLM is involved.
+
+        Separate from ``research`` so a failed or retried LLM call never re-fetches
+        (and re-bills) platform data, and so the request budget is exact.
+        """
+        query = state.config.research_query or default_research_query(state.strategy)
+        result = self._research_provider.search(query)
+        if not result.posts:
+            exc = InsufficientSignalError(f"no posts found for query {query.text!r}")
+            exc.research_fetch = result.fetch
+            raise exc
+        source = ResearchSource(
+            provider=self._research_provider.source_name,
+            source_ids=[p.source_id for p in result.posts],
+            synthetic=self._research_provider.synthetic,
+            query=result.fetch.query,
+            effective_query=result.fetch.effective_query,
+            retrieved_at=result.fetch.started_at,
+        )
+        return {
+            "source_posts": result.posts,
+            "research_source": source,
+            "research_fetches": [result.fetch],
+        }
+
     def research(self, state: GraphState) -> StateUpdate:
-        result = self._research.run(state.account, state.strategy)
+        """Interpretation only: the Research Agent reads the retrieved posts."""
+        if state.research_source is None:
+            raise InsufficientSignalError("no research material was retrieved")
+        result = self._research.run(
+            state.account, state.strategy, state.source_posts, state.research_source
+        )
         return {
             "research": result.findings,
             "research_brief": result.brief,

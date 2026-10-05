@@ -18,6 +18,7 @@ from social_growth_agent.agents.fakes import build_fake_llm
 from social_growth_agent.agents.research import SYNTHETIC_LIMITATION
 from social_growth_agent.errors import AgentOutputError, InsufficientSignalError
 from social_growth_agent.models import (
+    ClaimType,
     Confidence,
     ContentCandidate,
     CritiqueVerdict,
@@ -26,9 +27,10 @@ from social_growth_agent.models import (
     ResearchFinding,
 )
 from social_growth_agent.policies import ContentPolicy
+from social_growth_agent.policies.research_policy import small_sample_limitation
 from social_growth_agent.providers import LLMSettings
 from social_growth_agent.providers.mocks import MockResearchProvider, ScriptedLLMProvider
-from tests.conftest import always, make_critique, scripted_critic
+from tests.conftest import always, make_critique, research_material, scripted_critic
 
 
 def candidate(
@@ -57,8 +59,9 @@ REPORT = ResearchReport(
     findings=[
         FindingDraft(
             theme="latency wins",
-            summary="Concrete numbers drive engagement.",
-            evidence_post_ids=["src_001", "src_003"],
+            summary="Posts with concrete numbers showed higher engagement in the sample.",
+            claim_type=ClaimType.OBSERVATION,
+            evidence_source_ids=["src_001", "src_003"],
             signal_strength=0.8,
         )
     ],
@@ -72,19 +75,25 @@ REPORT = ResearchReport(
 
 def test_research_agent_converts_provider_output_into_domain_state(account, strategy):
     llm = ScriptedLLMProvider({ResearchReport: lambda _r: REPORT})
-    result = ResearchAgent(llm, MockResearchProvider()).run(account, strategy)
+    posts, source = research_material(strategy)
+    result = ResearchAgent(llm).run(account, strategy, posts, source)
 
     [finding] = result.findings
     assert isinstance(finding, ResearchFinding)
     assert finding.id.startswith("find_")  # ids assigned by the application, not the model
-    assert finding.evidence_post_ids == ["src_001", "src_003"]
+    assert finding.evidence_source_ids == ["src_001", "src_003"]
+    assert finding.claim_type is ClaimType.OBSERVATION
     brief = result.brief
     assert brief.opportunities[0].finding_ids == [finding.id]
     assert brief.confidence is Confidence.MEDIUM
     assert brief.source.provider == "mock_fixtures"
     assert brief.source.synthetic is True
-    assert set(brief.source.post_ids) == {"src_001", "src_002", "src_003", "src_005"}
-    assert brief.limitations == ["Only five posts.", SYNTHETIC_LIMITATION]
+    assert set(brief.source.source_ids) == {"src_001", "src_002", "src_003", "src_005"}
+    assert brief.limitations == [
+        "Only five posts.",
+        small_sample_limitation(4),
+        SYNTHETIC_LIMITATION,
+    ]
     request = llm.calls[0]
     assert "supplied by the application" in request.prompt
     assert "SYNTHETIC" in request.prompt
@@ -94,14 +103,12 @@ def test_research_agent_converts_provider_output_into_domain_state(account, stra
 def test_research_agent_rejects_findings_citing_unsupplied_posts(account, strategy):
     bad = REPORT.model_copy(
         update={
-            "findings": [REPORT.findings[0].model_copy(update={"evidence_post_ids": ["made_up"]})]
+            "findings": [REPORT.findings[0].model_copy(update={"evidence_source_ids": ["made_up"]})]
         }
     )
-    agent = ResearchAgent(
-        ScriptedLLMProvider({ResearchReport: lambda _r: bad}), MockResearchProvider()
-    )
+    agent = ResearchAgent(ScriptedLLMProvider({ResearchReport: lambda _r: bad}))
     with pytest.raises(AgentOutputError) as exc_info:
-        agent.run(account, strategy)
+        agent.run(account, strategy, *research_material(strategy))
     assert exc_info.value.llm_call is not None
     assert exc_info.value.llm_call.outcome == "invalid_output"
 
@@ -114,17 +121,15 @@ def test_research_agent_rejects_opportunity_with_unknown_finding(account, strate
             ]
         }
     )
-    agent = ResearchAgent(
-        ScriptedLLMProvider({ResearchReport: lambda _r: bad}), MockResearchProvider()
-    )
+    agent = ResearchAgent(ScriptedLLMProvider({ResearchReport: lambda _r: bad}))
     with pytest.raises(AgentOutputError):
-        agent.run(account, strategy)
+        agent.run(account, strategy, *research_material(strategy))
 
 
 def test_research_agent_raises_when_nothing_supplied(account, strategy):
-    agent = ResearchAgent(build_fake_llm(), MockResearchProvider(posts=[]))
+    _posts, source = research_material(strategy, MockResearchProvider(posts=[]))
     with pytest.raises(InsufficientSignalError):
-        agent.run(account, strategy)
+        ResearchAgent(build_fake_llm()).run(account, strategy, [], source)
 
 
 # --- content ------------------------------------------------------------------------
@@ -135,7 +140,7 @@ def generation_context(strategy, feedback=()) -> GenerationContext:
         id="find_1",
         theme="latency",
         summary="s",
-        evidence_post_ids=["src_001"],
+        evidence_source_ids=["src_001"],
         signal_strength=0.5,
     )
     return GenerationContext(

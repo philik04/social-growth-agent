@@ -3,8 +3,9 @@
     RUN_LIVE_LLM_TESTS=1 OPENAI_API_KEY=... [OPENAI_MODEL=...] \\
         uv run python -m social_growth_agent.services.live_demo
 
-Research material comes from the mock provider's synthetic fixture posts: X is not
-integrated yet and the research agent is told so. The run stops at human review.
+Research material comes from RESEARCH_PROVIDER: the mock provider's synthetic fixture
+posts by default (the research agent is told so), or live X with RESEARCH_PROVIDER=x (see
+``x_research_demo``). The run stops at human review.
 """
 
 import os

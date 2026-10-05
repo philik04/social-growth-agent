@@ -33,7 +33,7 @@ def test_successful_flow_pauses_for_human_review(account, strategy):
     result = make_service(make_llm(always(P))).start_run(account, strategy)
 
     assert result.status is RunStatus.AWAITING_REVIEW
-    assert node_path(result) == ["research", "generate", "critic", "request_review"]
+    assert node_path(result) == ["retrieve", "research", "generate", "critic", "request_review"]
     assert result.state.generation_attempts == 1
     assert result.state.review.status is ReviewStatus.PENDING
     assert result.pending_review is not None
@@ -58,6 +58,7 @@ def test_no_passing_candidates_triggers_retry(account, strategy):
 
     assert result.status is RunStatus.AWAITING_REVIEW
     assert node_path(result) == [
+        "retrieve",
         "research",
         "generate",
         "critic",
@@ -91,7 +92,15 @@ def test_retry_limit_reached_ends_in_failure(account, strategy):
     result = make_service(make_llm(always(R))).start_run(account, strategy, config)
 
     assert result.status is RunStatus.FAILED
-    assert node_path(result) == ["research", "generate", "critic", "generate", "critic", "failed"]
+    assert node_path(result) == [
+        "retrieve",
+        "research",
+        "generate",
+        "critic",
+        "generate",
+        "critic",
+        "failed",
+    ]
     assert result.pending_review is None
     assert result.state.errors[-1].node == "failed"
     assert result.state.errors[-1].error_type == "RetryLimitReached"
@@ -182,7 +191,7 @@ def test_transient_failure_exhausting_retries_fails_run_without_raising(account,
 
     assert result.status is RunStatus.FAILED
     assert len(llm.calls) == 3  # FAST_RETRY.max_attempts, then the error handler
-    assert node_path(result) == ["research", "failed"]
+    assert node_path(result) == ["retrieve", "research", "failed"]
     [error] = result.state.errors
     assert (error.node, error.error_type) == ("research", "TransientProviderError")
     assert result.state.llm_calls[-1].outcome is LLMCallOutcome.PROVIDER_ERROR

@@ -9,12 +9,15 @@ from social_growth_agent.providers.mocks import (
 )
 
 
-def test_research_provider_is_deterministic_and_filters_by_topic():
-    query = ResearchQuery(account_id="a", niche="AI", topics=["llm evaluation"])
+def test_research_provider_is_deterministic_and_filters_by_query_phrase():
+    query = ResearchQuery(text='"llm evaluation"')
     first = MockResearchProvider().search(query)
     second = MockResearchProvider().search(query)
-    assert first == second
-    assert [p.id for p in first] == ["src_002", "src_005"]
+    assert first.posts == second.posts
+    assert [p.source_id for p in first.posts] == ["src_002", "src_005"]
+    assert all(p.query == '"llm evaluation"' for p in first.posts)
+    assert first.fetch.requests_made == 0  # synthetic: no platform requests
+    assert first.fetch.posts_fetched == 2
 
 
 def test_publisher_assigns_sequential_ids_and_enforces_length():

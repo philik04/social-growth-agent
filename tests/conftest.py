@@ -1,5 +1,6 @@
 from collections.abc import Callable
 
+import httpx
 import pytest
 from langgraph.types import RetryPolicy
 
@@ -20,10 +21,13 @@ from social_growth_agent.models import (
     CritiqueAssessment,
     CritiqueVerdict,
     IssueCategory,
+    ResearchSource,
     RiskLevel,
+    SourcePost,
     ToneMatch,
 )
-from social_growth_agent.providers import LLMRequest
+from social_growth_agent.policies import default_research_query
+from social_growth_agent.providers import LLMRequest, SocialResearchProvider
 from social_growth_agent.providers.mocks import (
     MockResearchProvider,
     ScriptedLLMProvider,
@@ -36,6 +40,27 @@ from social_growth_agent.services import WorkflowService
 FAST_RETRY = RetryPolicy(
     max_attempts=3, initial_interval=0.0, jitter=False, retry_on=TransientProviderError
 )
+
+_CREDENTIAL_ENV = ("OPENAI_API_KEY", "X_BEARER_TOKEN", "LLM_PROVIDER", "RESEARCH_PROVIDER")
+
+
+@pytest.fixture(autouse=True)
+def offline(request, monkeypatch):
+    """Normal tests never need credentials and never reach the network.
+
+    Credentials from the environment are removed and real httpx transports are
+    disabled; X tests use ``httpx.MockTransport``. ``live`` tests are exempt.
+    """
+    if request.node.get_closest_marker("live"):
+        return
+    for name in _CREDENTIAL_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    def blocked(self, request):
+        raise RuntimeError(f"real network access in tests is disabled: {request.url.host}")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", blocked)
+
 
 type VerdictScript = Callable[[int, int], CritiqueVerdict]
 """(generation_attempt, candidate_index) -> verdict the *model* recommends"""
@@ -131,3 +156,20 @@ def make_critique(
             tone_match=ToneMatch.STRONG,
         ),
     )
+
+
+def research_material(
+    strategy: ContentStrategy, provider: SocialResearchProvider | None = None
+) -> tuple[list[SourcePost], ResearchSource]:
+    """What the retrieve node hands the Research Agent, built from a provider."""
+    provider = provider or MockResearchProvider()
+    result = provider.search(default_research_query(strategy))
+    source = ResearchSource(
+        provider=provider.source_name,
+        source_ids=[p.source_id for p in result.posts],
+        synthetic=provider.synthetic,
+        query=result.fetch.query,
+        effective_query=result.fetch.effective_query,
+        retrieved_at=result.fetch.started_at,
+    )
+    return result.posts, source

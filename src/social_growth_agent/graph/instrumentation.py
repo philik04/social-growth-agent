@@ -98,4 +98,6 @@ def _failure_update(name: str, state: GraphState, exc: SocialGrowthError) -> Sta
     update: StateUpdate = {"status": RunStatus.FAILED, "errors": [error]}
     if exc.llm_call is not None:
         update["llm_calls"] = [exc.llm_call]
+    if exc.research_fetch is not None:
+        update["research_fetches"] = [exc.research_fetch]
     return update

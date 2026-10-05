@@ -3,8 +3,7 @@
 from social_growth_agent.config import AppSettings
 from social_growth_agent.graph import AgentSettings, Dependencies
 from social_growth_agent.providers import SocialResearchProvider
-from social_growth_agent.providers.factory import build_llm_provider
-from social_growth_agent.providers.mocks import MockResearchProvider
+from social_growth_agent.providers.factory import build_llm_provider, build_research_provider
 
 
 def build_dependencies(
@@ -13,6 +12,6 @@ def build_dependencies(
     """Raises ``ConfigurationError`` if the configured provider cannot be built."""
     return Dependencies(
         llm=build_llm_provider(settings),
-        research_provider=research_provider or MockResearchProvider(),
+        research_provider=research_provider or build_research_provider(settings),
         agent_settings=AgentSettings.from_app_settings(settings),
     )

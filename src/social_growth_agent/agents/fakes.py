@@ -14,6 +14,7 @@ from social_growth_agent.agents.content import CandidateBatch, CandidateDraft
 from social_growth_agent.agents.critic import CandidateEvaluation, CriticReport, IssueDraft
 from social_growth_agent.agents.research import FindingDraft, OpportunityDraft, ResearchReport
 from social_growth_agent.models import (
+    ClaimType,
     Confidence,
     CritiqueVerdict,
     HookType,
@@ -24,24 +25,35 @@ from social_growth_agent.models import (
 )
 from social_growth_agent.providers.llm import LLMRequest
 from social_growth_agent.providers.mocks.llm import ScriptedLLMProvider, payload_list
+from social_growth_agent.providers.mocks.social import mentions
 
 UNSUPPORTED_CLAIM_MARKERS = ("guaranteed", "100%", "always works")
 _HOOKS = tuple(HookType)
 
 
 def fake_research(request: LLMRequest) -> ResearchReport:
-    by_topic: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    """Groups posts by the first content pillar they mention (else by the query) and
+    cites exactly the supplied ``source_id``s, so it never fabricates provenance."""
+    raw_pillars = request.payload.get("pillars", [])
+    pillars = [str(p) for p in raw_pillars] if isinstance(raw_pillars, list) else []
+    fallback = str(request.payload.get("query", "supplied posts"))
+    by_theme: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for post in payload_list(request, "posts"):
-        by_topic[str(post["topic"])].append(post)
+        theme = next((p for p in pillars if mentions(str(post["text"]), p)), fallback)
+        by_theme[theme].append(post)
     findings = []
-    for topic in sorted(by_topic):
-        posts = by_topic[topic]
-        engagement = sum(int(p["likes"]) + 2 * int(p["reposts"]) + int(p["replies"]) for p in posts)
+    for theme in sorted(by_theme):
+        posts = by_theme[theme]
+        engagement = sum(
+            _metric(p, "likes") + 2 * _metric(p, "reposts") + _metric(p, "replies") for p in posts
+        )
         findings.append(
             FindingDraft(
-                theme=topic,
-                summary=f"{len(posts)} high-engagement posts about {topic}.",
-                evidence_post_ids=[str(p["id"]) for p in posts],
+                theme=theme,
+                summary=f"{len(posts)} posts about {theme} showed engagement in the supplied "
+                "sample.",
+                claim_type=ClaimType.OBSERVATION,
+                evidence_source_ids=[str(p["source_id"]) for p in posts],
                 signal_strength=min(1.0, engagement / 5_000),
             )
         )
@@ -54,13 +66,18 @@ def fake_research(request: LLMRequest) -> ResearchReport:
         for i, f in enumerate(findings)
     ]
     return ResearchReport(
-        topic=", ".join(sorted(by_topic)) or "none",
+        topic=", ".join(sorted(by_theme)) or "none",
         summary=f"{len(findings)} themes found in the supplied posts.",
         findings=findings,
         content_opportunities=opportunities,
         confidence=Confidence.MEDIUM if len(findings) > 1 else Confidence.LOW,
         limitations=["Small sample of supplied posts."],
     )
+
+
+def _metric(post: dict[str, Any], name: str) -> int:
+    value = post.get(name)
+    return int(value) if isinstance(value, int) else 0
 
 
 def fake_content(request: LLMRequest) -> CandidateBatch:

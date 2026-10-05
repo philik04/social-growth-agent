@@ -50,6 +50,19 @@ class LLMCallOutcome(StrEnum):
     INVALID_OUTPUT = "invalid_output"
 
 
+class ProviderErrorCategory(StrEnum):
+    """Why an external provider call failed. Recorded on runs; drives no routing by itself."""
+
+    AUTH = "auth"
+    RATE_LIMITED = "rate_limited"
+    TIMEOUT = "timeout"
+    NETWORK = "network"
+    SERVER_ERROR = "server_error"
+    BAD_REQUEST = "bad_request"
+    MALFORMED_RESPONSE = "malformed_response"
+    UNEXPECTED_STATUS = "unexpected_status"
+
+
 class LLMCall(DomainModel):
     """Metadata for one structured LLM call (no prompt or output text is stored)."""
 

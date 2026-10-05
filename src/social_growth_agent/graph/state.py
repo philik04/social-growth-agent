@@ -3,10 +3,12 @@
 Design notes:
 - ``GraphState`` is a Pydantic model so every node update is validated.
 - Fields that accumulate across loop iterations (candidates, critiques, errors,
-  events) use an append reducer. Each candidate and critique carries its
-  ``generation_attempt``, so the full history of a run stays traceable and
+  events, llm_calls, research_fetches) use an append reducer. Each candidate and
+  critique carries its ``generation_attempt``, so the full history of a run stays traceable and
   "current" views are derived rather than stored twice.
 - Nodes return a partial ``StateUpdate``; they never mutate state in place.
+- No credentials ever enter state: providers hold them, state holds only results
+  and metadata (and state is what gets checkpointed).
 """
 
 import operator
@@ -27,10 +29,14 @@ from social_growth_agent.models import (
     PostMetrics,
     PublishState,
     ResearchBrief,
+    ResearchFetch,
     ResearchFinding,
+    ResearchQuery,
+    ResearchSource,
     ReviewState,
     RunError,
     RunStatus,
+    SourcePost,
     new_id,
     utc_now,
 )
@@ -46,6 +52,9 @@ class RunConfig(BaseModel):
     candidates_per_attempt: int = Field(default=3, ge=1, le=10)
     max_research_attempts: int = Field(default=2, ge=1, le=5)
     max_edit_rounds: int = Field(default=3, ge=0, le=10)
+    research_query: ResearchQuery | None = Field(
+        default=None, description="Explicit research query; defaults to the strategy pillars."
+    )
     content_policy: ContentPolicy = Field(default_factory=ContentPolicy)
     critic_gate: CriticGate = Field(default_factory=CriticGate)
 
@@ -60,7 +69,9 @@ class GraphState(BaseModel):
     strategy: ContentStrategy
     config: RunConfig = Field(default_factory=RunConfig)
 
-    # Work products
+    # Work products. Retrieved posts are kept so evidence ids stay checkable later.
+    source_posts: list[SourcePost] = Field(default_factory=list)
+    research_source: ResearchSource | None = None
     research: list[ResearchFinding] = Field(default_factory=list)
     research_brief: ResearchBrief | None = None
     candidates: Annotated[list[ContentCandidate], operator.add] = Field(default_factory=list)
@@ -79,6 +90,7 @@ class GraphState(BaseModel):
     errors: Annotated[list[RunError], operator.add] = Field(default_factory=list)
     events: Annotated[list[NodeEvent], operator.add] = Field(default_factory=list)
     llm_calls: Annotated[list[LLMCall], operator.add] = Field(default_factory=list)
+    research_fetches: Annotated[list[ResearchFetch], operator.add] = Field(default_factory=list)
 
     def current_candidates(self) -> list[ContentCandidate]:
         """Model-generated candidates of the latest attempt (human edits excluded)."""
@@ -126,6 +138,8 @@ class GraphState(BaseModel):
 class StateUpdate(TypedDict, total=False):
     """The partial update a node may return. Keys mirror ``GraphState`` fields."""
 
+    source_posts: list[SourcePost]
+    research_source: ResearchSource
     research: list[ResearchFinding]
     research_brief: ResearchBrief
     candidates: list[ContentCandidate]
@@ -138,3 +152,4 @@ class StateUpdate(TypedDict, total=False):
     errors: list[RunError]
     events: list[NodeEvent]
     llm_calls: list[LLMCall]
+    research_fetches: list[ResearchFetch]

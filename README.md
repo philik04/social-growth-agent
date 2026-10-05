@@ -3,10 +3,10 @@
 An agentic orchestration system that grows a creator's or founder's presence on X by running a
 closed loop: **research → generate → critique → human approval → publish → analyze → update strategy**.
 
-> Status: **Phase 2, real LLM agents.** Research, content and critic agents run on OpenAI
-> structured outputs, behind a provider abstraction, while the graph keeps authority over routing,
-> retries, review and failure. X is not integrated yet: research uses supplied sample posts.
-> See [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: **Phase 3, real X research with provenance.** Research can run on live X posts
+> (opt-in) through a read-only provider boundary; every research finding cites the X post ids
+> that support it, checked in code. Agents run on OpenAI structured outputs while the graph keeps
+> authority over routing, retries, review and failure. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why this is more than a multi-agent chatbot
 
@@ -75,6 +75,26 @@ and prints a trace like this (from the deterministic demo; ids and text vary):
   route: request_review -> PAUSED for human review
 ```
 
+### Live X research (opt-in, consumes X API usage)
+
+Research uses synthetic fixture posts unless `RESEARCH_PROVIDER=x` is set. The X provider calls
+the official X API v2 recent-search endpoint with an app-only Bearer token (read-only), fetches
+one small page (`X_MAX_RESULTS_PER_QUERY`, default 10) and never paginates. Retrieval attempts
+per run are capped by `X_MAX_QUERIES_PER_RUN` (default 1). A rate limit (HTTP 429) fails the run
+with the reset time recorded; nothing sleeps or retries automatically. Your query is kept
+verbatim; `-is:retweet` is appended to a separate effective query.
+
+```bash
+export X_BEARER_TOKEN=...              # or put it in .env (git-ignored)
+RUN_LIVE_X_TESTS=1 uv run python -m social_growth_agent.services.x_research_demo "AI agents lang:en"
+RUN_LIVE_X_TESTS=1 uv run pytest -m live tests/live/test_x_live.py
+```
+
+The demo prints the query, request count, posts fetched, a one-line summary per post, findings
+with their evidence ids (`x_<post id>`), and continues through generation and critique (OpenAI if
+`OPENAI_API_KEY` is set, otherwise the deterministic fake agents, and it says which). No test in
+the normal suite needs credentials or network access.
+
 In code:
 
 ```python
@@ -93,11 +113,11 @@ run = service.submit_review(run.state.run_id, decision)  # approve / reject / ed
 src/social_growth_agent/
   config.py       settings from env / .env
   models/         domain objects (Pydantic, immutable)
-  policies/       content policy (hard rules), critic gate, human edit policy
+  policies/       content policy (hard rules), critic gate, human edit policy, research rules
   graph/          state, nodes, pure routing, builder, checkpoint serialization
   agents/         research, content, critic, prompts/*.md, deterministic fakes
-  providers/      LLM + social-platform protocols, OpenAI adapter, mocks/
-  services/       WorkflowService, factory, trace printer, demo, live_demo
+  providers/      LLM + social-platform protocols, OpenAI adapter, x/ (X research), mocks/
+  services/       WorkflowService, factory, trace printer, demo, live_demo, x_research_demo
   api/            FastAPI app factory
   evaluation/     critic evaluation harness
   observability/  structured logging, timing

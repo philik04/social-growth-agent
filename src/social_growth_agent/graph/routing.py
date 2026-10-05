@@ -9,11 +9,16 @@ from typing import Literal
 from social_growth_agent.graph.state import GraphState
 from social_growth_agent.models import ReviewAction, RunStatus
 
+AfterRetrieve = Literal["research", "failed"]
 AfterResearch = Literal["generate", "failed"]
 AfterGenerate = Literal["critic", "failed"]
 AfterCritique = Literal["request_review", "generate", "failed"]
 AfterReview = Literal["critique_edit", "__end__"]
 AfterEditCritique = Literal["request_review", "failed"]
+
+
+def route_after_retrieve(state: GraphState) -> AfterRetrieve:
+    return "failed" if state.status is RunStatus.FAILED else "research"
 
 
 def route_after_research(state: GraphState) -> AfterResearch:

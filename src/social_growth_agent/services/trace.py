@@ -8,10 +8,12 @@ from social_growth_agent.models import (
     Critique,
     LLMCall,
     ResearchBrief,
+    ResearchFetch,
     ResearchFinding,
     ReviewState,
     RunError,
     RunStatus,
+    SourcePost,
 )
 
 
@@ -37,6 +39,12 @@ class TracePrinter:
 
     def _describe(self, update: Mapping[str, Any]) -> list[str]:
         lines: list[str] = []
+        for fetch in update.get("research_fetches", []):
+            if isinstance(fetch, ResearchFetch):
+                lines.append(describe_fetch(fetch))
+        for post in update.get("source_posts", []):
+            if isinstance(post, SourcePost):
+                lines.append(describe_post(post))
         brief = update.get("research_brief")
         if isinstance(brief, ResearchBrief):
             lines.append(
@@ -47,8 +55,8 @@ class TracePrinter:
         for f in update.get("research", []):
             if isinstance(f, ResearchFinding):
                 lines.append(
-                    f"finding: {f.theme} signal={f.signal_strength:.2f} "
-                    f"evidence={f.evidence_post_ids}"
+                    f"finding [{f.claim_type}]: {f.theme} signal={f.signal_strength:.2f} "
+                    f"evidence={f.evidence_source_ids}"
                 )
         for c in update.get("candidates", []):
             if isinstance(c, ContentCandidate):
@@ -83,3 +91,30 @@ class TracePrinter:
         if isinstance(status, RunStatus):
             lines.append(f"status: {status}")
         return lines
+
+
+def describe_fetch(fetch: ResearchFetch) -> str:
+    line = (
+        f"fetch: provider={fetch.provider} query={fetch.query!r} "
+        f"effective={fetch.effective_query!r} requests={fetch.requests_made} "
+        f"posts={fetch.posts_fetched} users={fetch.users_fetched} "
+        f"latency={fetch.latency_ms:.0f}ms outcome={fetch.outcome}"
+    )
+    if fetch.error_category is not None:
+        line += f" error={fetch.error_category}"
+    if fetch.rate_limit_reset_at is not None:
+        line += f" rate_limit_reset={fetch.rate_limit_reset_at.isoformat()}"
+    return line
+
+
+def describe_post(post: SourcePost) -> str:
+    def metric(value: int | None) -> str:
+        return "n/a" if value is None else str(value)
+
+    author = f"@{post.author_username}" if post.author_username else f"user:{post.author_id}"
+    text = " ".join(post.text.split())
+    return (
+        f"post {post.source_id} {author} likes={metric(post.likes)} "
+        f"reposts={metric(post.reposts)} replies={metric(post.replies)} "
+        f"quotes={metric(post.quotes)} impressions={metric(post.impressions)}: {text[:90]}"
+    )
