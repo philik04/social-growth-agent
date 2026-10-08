@@ -24,10 +24,16 @@ from social_growth_agent.providers.x import XPublisher
 from social_growth_agent.providers.x.oauth1 import OAuth1Credentials
 from social_growth_agent.services.demo import demo_account
 from social_growth_agent.services.publications import PublicationService
-from tests.db.conftest import TEST_PRICES, create_scratch_database, drop_scratch_database, sql
+from tests.db.conftest import (
+    DB_PASSWORD,
+    TEST_PRICES,
+    create_scratch_database,
+    drop_scratch_database,
+    sql,
+)
 from tests.db.helpers import CrashOnce, SimulatedCrash
 from tests.db.publishing_helpers import approved_run, worker
-from tests.db.test_secrets_and_schema import DB_PASSWORD, dump_everything, with_password
+from tests.db.test_secrets_and_schema import dump_everything
 from tests.x_fakes import FakeX, created_post
 
 PUBLISH_SECRETS = {
@@ -57,12 +63,12 @@ def x_publisher(fake: FakeX) -> XPublisher:
 
 
 def test_publishing_credentials_never_reach_the_database_api_output_or_logs(
-    make_runtime, client_for, run_payload, clean_db, caplog
+    db_url_with_secret_password, make_runtime, client_for, run_payload, clean_db, caplog
 ):
     caplog.set_level(logging.DEBUG)
     fake = FakeX(created_post("1908222222222222222"))
     publisher = x_publisher(fake)
-    runtime = make_runtime(publisher=publisher, url=with_password(clean_db))
+    runtime = make_runtime(publisher=publisher, url=db_url_with_secret_password)
     client = client_for(runtime)
     run_id, candidate_id = approved_run(client, run_payload)
     publication = client.post(
@@ -84,7 +90,13 @@ def test_publishing_credentials_never_reach_the_database_api_output_or_logs(
             "/health",
         )
     ]
-    haystacks = [dump_everything(clean_db), *outputs, caplog.text, repr(publisher)]
+    haystacks = [
+        dump_everything(clean_db),
+        *outputs,
+        caplog.text,
+        repr(publisher),
+        repr(runtime.db),
+    ]
     for secret in (*PUBLISH_SECRETS.values(), DB_PASSWORD):
         for haystack in haystacks:
             assert secret not in haystack

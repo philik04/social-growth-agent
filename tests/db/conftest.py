@@ -98,6 +98,42 @@ def database_url(base_database_url: str) -> Iterator[str]:
         drop_scratch_database(base_database_url, url)
 
 
+# Sentinel for leak tests. It is the real password of a throwaway login role (below), so
+# the server must accept it on every auth method, trust (local) and scram (CI) alike.
+DB_PASSWORD = "db-pass-SECRET-91c2"
+
+
+@pytest.fixture
+def db_url_with_secret_password(clean_db: str) -> Iterator[str]:
+    """``clean_db`` reached through a login role whose password is ``DB_PASSWORD``.
+
+    The role inherits the test user's privileges, so the app behaves exactly as with
+    ``clean_db``; the working TEST_DATABASE_URL credentials are never changed. Request
+    this fixture before ``make_runtime`` so the runtimes close before the role is dropped.
+    """
+    role = f"sga_secret_probe_{uuid4().hex[:10]}"
+    engine = _admin_engine(clean_db)
+    with engine.connect() as conn:
+        owner = conn.execute(text("SELECT current_user")).scalar_one()
+        conn.execute(text(f"CREATE ROLE \"{role}\" LOGIN PASSWORD '{DB_PASSWORD}'"))
+        conn.execute(text(f'GRANT "{owner}" TO "{role}"'))
+    try:
+        yield (
+            make_url(sqlalchemy_url(clean_db))
+            .set(username=role, password=DB_PASSWORD)
+            .render_as_string(hide_password=False)
+        )
+    finally:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = :r"),
+                {"r": role},
+            )
+            conn.execute(text(f'DROP OWNED BY "{role}"'))
+            conn.execute(text(f'DROP ROLE "{role}"'))
+        engine.dispose()
+
+
 @pytest.fixture
 def clean_db(database_url: str) -> str:
     keep = {"checkpoint_migrations"}

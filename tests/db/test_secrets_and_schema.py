@@ -7,7 +7,7 @@ from alembic.runtime.migration import MigrationContext
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
-from sqlalchemy import create_engine, make_url, pool
+from sqlalchemy import create_engine, pool
 
 from social_growth_agent.agents.fakes import build_fake_llm
 from social_growth_agent.api.app import create_app
@@ -22,20 +22,14 @@ from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.runs import InlineExecutor, RunService
 from social_growth_agent.services.runtime import Runtime
 from social_growth_agent.services.workflow import WorkflowService
-from tests.db.conftest import TEST_PRICES, create_scratch_database, drop_scratch_database, sql
+from tests.db.conftest import (
+    DB_PASSWORD,
+    TEST_PRICES,
+    create_scratch_database,
+    drop_scratch_database,
+    sql,
+)
 from tests.x_fakes import RESET_EPOCH, TOKEN, FakeX, error, ok, sample_body
-
-DB_PASSWORD = "db-pass-SECRET-91c2"
-
-
-def with_password(url: str) -> str:
-    # The local test server uses trust auth, so a password in the URL is accepted (and
-    # must still never surface anywhere).
-    return (
-        make_url(sqlalchemy_url(url))
-        .set(password=DB_PASSWORD)
-        .render_as_string(hide_password=False)
-    )
 
 
 def dump_everything(url: str) -> str:
@@ -56,11 +50,11 @@ def dump_everything(url: str) -> str:
 
 
 def test_secrets_never_reach_db_rows_checkpoints_or_api_output(
-    make_runtime, client_for, run_payload, clean_db, caplog
+    db_url_with_secret_password, make_runtime, client_for, run_payload, clean_db, caplog
 ):
     caplog.set_level(logging.DEBUG)
     ok_x = FakeX(ok(sample_body(5)))
-    runtime = make_runtime(research=ok_x.provider(), url=with_password(clean_db))
+    runtime = make_runtime(research=ok_x.provider(), url=db_url_with_secret_password)
     client = client_for(runtime)
     query = {"research_query": {"text": "AI agents"}}
     good = client.post("/runs", json=run_payload(**query)).json()["id"]
@@ -68,7 +62,7 @@ def test_secrets_never_reach_db_rows_checkpoints_or_api_output(
 
     limited = make_runtime(
         research=FakeX(error(429, **{"x-rate-limit-reset": str(RESET_EPOCH)})).provider(),
-        url=with_password(clean_db),
+        url=db_url_with_secret_password,
     )
     limited_client = client_for(limited)
     failed = limited_client.post("/runs", json=run_payload(**query)).json()["id"]
