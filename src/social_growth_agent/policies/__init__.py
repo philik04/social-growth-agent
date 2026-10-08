@@ -14,14 +14,18 @@ from social_growth_agent.policies.content_policy import (
 from social_growth_agent.policies.critic_gate import CriticGate
 from social_growth_agent.policies.edit_policy import edited_candidate, is_material_edit
 from social_growth_agent.policies.research_policy import (
+    DEFAULT_MIN_SIGNAL_POSTS,
     MIN_REPRESENTATIVE_SAMPLE,
     SYNTHETIC_LIMITATION,
+    assess_signal,
+    broadened_queries,
     default_research_query,
     deterministic_limitations,
 )
 
 __all__ = [
     "DEFAULT_MAX_POST_LENGTH",
+    "DEFAULT_MIN_SIGNAL_POSTS",
     "DEFAULT_RULES",
     "MIN_REPRESENTATIVE_SAMPLE",
     "SYNTHETIC_LIMITATION",
@@ -31,6 +35,8 @@ __all__ = [
     "HardRule",
     "MaxLengthRule",
     "NonBlankContentRule",
+    "assess_signal",
+    "broadened_queries",
     "default_research_query",
     "deterministic_limitations",
     "edited_candidate",

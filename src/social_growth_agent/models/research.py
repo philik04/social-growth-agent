@@ -61,6 +61,14 @@ class SourcePost(DomainModel):
         return [name for name in names if getattr(self, name) is None]
 
 
+class SignalDecision(StrEnum):
+    """What the deterministic signal check decided after a retrieval (Phase 4)."""
+
+    PROCEED = "proceed"
+    RETRY = "retry"
+    BROADEN = "broaden"
+
+
 class FetchOutcome(StrEnum):
     SUCCESS = "success"
     EMPTY = "empty"
@@ -74,6 +82,7 @@ class ResearchFetch(DomainModel):
     from these counts and a current price list.
     """
 
+    id: str = Field(default_factory=lambda: new_id("fetch"))
     provider: str
     query: str = Field(description="Original query, unmodified.")
     effective_query: str = Field(description="The query actually sent to the platform.")
@@ -135,6 +144,10 @@ class ResearchSource(DomainModel):
     query: str
     effective_query: str
     retrieved_at: datetime
+    broadened_queries: list[str] = Field(
+        default_factory=list,
+        description="Deterministically broadened queries used after the original (Phase 4).",
+    )
 
 
 class ResearchBrief(DomainModel):

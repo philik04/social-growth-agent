@@ -1,0 +1,22 @@
+# Price list for cost ESTIMATES. Prices live only here, never in code.
+#
+# A price that is absent (or commented out) is "unknown": estimates list it under
+# missing_prices and report no total. Fill in the current values from the providers'
+# own pricing pages and bump `version` and `as_of` whenever you change anything.
+# Every run stores the exact price list it was estimated with (pricing_versions table).
+
+version = "unset"
+as_of = "2026-10-05"
+currency = "USD"
+source = "Not configured: prices intentionally left blank. See developer.x.com and openai.com/api/pricing."
+
+# Providers that never cost money: synthetic fixtures and the deterministic fake agents.
+unbilled_providers = ["mock_fixtures", "fake"]
+
+[x]
+# post_read = 0.0   # price per post read (X API v2, pay-per-use)
+# user_read = 0.0   # price per user object read (expansions)
+
+[openai.models."gpt-4.1-mini"]
+# input_per_million = 0.0
+# output_per_million = 0.0

@@ -1,0 +1,22 @@
+# Local PostgreSQL for development and DB tests. Nothing else runs in containers.
+#   docker compose up -d
+#   DATABASE_URL=postgresql://sga@localhost:5433/sga uv run sga-db upgrade
+#   TEST_DATABASE_URL=postgresql://sga@localhost:5433/sga uv run pytest -m db
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: sga
+      POSTGRES_DB: sga
+      POSTGRES_HOST_AUTH_METHOD: trust # local only: the port is bound to 127.0.0.1
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - sga-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "sga"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  sga-postgres:

@@ -28,13 +28,16 @@ Each phase ends with a working, tested system. Scope stays X-only until the loop
 - Opt-in live demo and test (`RUN_LIVE_X_TESTS=1`). Mock stays the default research provider.
 - **Exit:** met offline (165 tests, no credentials). Still open: the first live X run, the `enough_signal?` broaden loop, account timelines, the labelled critic eval set and cost per run (moved to Phase 4 below).
 
-## Phase 4: Human-in-the-loop persistence and resume
-- Validate Phase 2/3 live paths once with real keys; fix anything real-model or real-X specific.
-- Postgres checkpointer; SQLAlchemy models for runs, candidates, critiques, decisions, LLM calls and research fetches.
-- API: start run, list pending reviews, submit decision, get run.
-- Regenerate-with-reviewer-notes loop (edit + mandatory re-critique already exists).
-- Carried over: `enough_signal?` broaden-research loop, labelled critic eval set, cost per run from `LLMCall` and `ResearchFetch` counts against a configurable price table outside business logic.
-- **Exit:** a run survives a process restart between pause and resume.
+## Phase 4: Persistent backend, review API and resume (done)
+- PostgreSQL: LangGraph `PostgresSaver` for execution state; SQLAlchemy 2 tables (Alembic `0001`) for runs, source posts, briefs, findings with evidence, candidates, critiques, review decisions, events, errors, and a usage ledger; `sga-db` CLI; `docker-compose.yml` for local Postgres.
+- Provenance enforced by foreign keys: evidence can only cite a post the same run retrieved.
+- API: start run, list runs, get run, pending reviews, review (approve / reject / edit / regenerate with notes), resume, usage. Background thread pool; 202 responses; 404/409/422/503 mapping.
+- Restart safety: checkpoint after every step; stalled runs are flagged at startup and resumed only explicitly, without repeating completed X retrievals or generations.
+- Regenerate with reviewer notes: a bounded new generation cycle (`max_regenerations`); notes persisted and passed to the Content Agent; previous critiques kept. Reject is terminal.
+- Enough-signal loop: deterministic post count after retrieval; broaden or retry within `max_research_attempts` and the X request budget; every request recorded.
+- Usage and cost: canonical counts per call (X post reads and user reads separate, tokens per model); prices only in `pricing.toml`; each run stores its price list so estimates are reproducible (`at_run_pricing` vs `at_current_pricing`); always labelled estimated.
+- CI workflow with a PostgreSQL service; DB tests skip locally without `TEST_DATABASE_URL` and fail in CI.
+- **Exit:** met. A run survives a killed process between steps and between pause and resume (restart demo and DB tests). Still open: a labelled critic eval set, real prices in `pricing.toml`, and a live run of the broaden loop with `X_MAX_QUERIES_PER_RUN > 1`.
 
 ## Phase 5: Publishing
 - X publisher adapter; `publish` node after approval; idempotency keys to prevent double posts.

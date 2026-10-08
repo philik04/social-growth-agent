@@ -3,6 +3,7 @@
 Secrets are ``SecretStr`` so they never appear in reprs, logs or tracebacks.
 """
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -35,3 +36,14 @@ class AppSettings(BaseSettings):
         default=1, ge=1, le=5, description="X requests per run, including any retries."
     )
     x_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    database_url: SecretStr | None = Field(
+        default=None,
+        description="PostgreSQL URL for the run API. SecretStr: it may contain a password.",
+    )
+    pricing_file: Path = Field(
+        default=Path("pricing.toml"), description="TOML price list used for cost estimates."
+    )
+    api_max_concurrent_runs: int = Field(
+        default=2, ge=1, le=16, description="Worker threads executing runs in the API process."
+    )

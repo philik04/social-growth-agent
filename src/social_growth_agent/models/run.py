@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import Field
 
-from social_growth_agent.models.base import DomainModel, utc_now
+from social_growth_agent.models.base import DomainModel, new_id, utc_now
 
 
 class RunStatus(StrEnum):
@@ -13,11 +13,14 @@ class RunStatus(StrEnum):
     AWAITING_REVIEW = "awaiting_review"
     APPROVED = "approved"
     REJECTED = "rejected"
-    REGENERATION_REQUESTED = "regeneration_requested"
     FAILED = "failed"
+    # Service-level states (Phase 4). The graph never sets these; the run service does.
+    QUEUED = "queued"
+    STALLED = "stalled"
 
 
 class RunError(DomainModel):
+    id: str = Field(default_factory=lambda: new_id("err"))
     node: str
     message: str
     generation_attempt: int = Field(ge=0)
@@ -28,6 +31,7 @@ class RunError(DomainModel):
 class NodeEvent(DomainModel):
     """One node execution. Becomes an OpenTelemetry span in a later phase."""
 
+    id: str = Field(default_factory=lambda: new_id("evt"))
     node: str
     generation_attempt: int = Field(ge=0)
     outcome: str
@@ -66,6 +70,7 @@ class ProviderErrorCategory(StrEnum):
 class LLMCall(DomainModel):
     """Metadata for one structured LLM call (no prompt or output text is stored)."""
 
+    id: str = Field(default_factory=lambda: new_id("llm"))
     agent: str
     task: str
     provider: str

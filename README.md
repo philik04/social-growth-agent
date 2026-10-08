@@ -3,10 +3,12 @@
 An agentic orchestration system that grows a creator's or founder's presence on X by running a
 closed loop: **research → generate → critique → human approval → publish → analyze → update strategy**.
 
-> Status: **Phase 3, real X research with provenance.** Research can run on live X posts
-> (opt-in) through a read-only provider boundary; every research finding cites the X post ids
-> that support it, checked in code. Agents run on OpenAI structured outputs while the graph keeps
-> authority over routing, retries, review and failure. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: **Phase 4, persistent backend.** Runs live in PostgreSQL and survive process
+> restarts; a REST API starts runs, lists pending reviews and takes approve / reject / edit /
+> regenerate-with-notes decisions. Research can run on live X posts (opt-in); every finding
+> cites the X post ids that support it, checked in code and by database constraints. Usage is
+> recorded per call and priced as labelled estimates from a config file. See
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why this is more than a multi-agent chatbot
 
@@ -47,6 +49,45 @@ uv run ruff check . && uv run ruff format --check .  # lint + format
 uv run mypy                                          # strict type check
 ```
 
+### Persistent API (PostgreSQL)
+
+```bash
+docker compose up -d                                   # PostgreSQL 16 on 127.0.0.1:5433
+export DATABASE_URL=postgresql://sga@localhost:5433/sga LLM_PROVIDER=fake
+uv run sga-db upgrade                                  # migrations + checkpoint tables
+uv run uvicorn social_growth_agent.api.app:create_app --factory --port 8000
+uv run python -m social_growth_agent.services.restart_demo   # kill/restart/resume, offline
+TEST_DATABASE_URL=$DATABASE_URL uv run pytest          # full suite incl. DB tests (-m db: only those)
+```
+
+| Method | Path | |
+|---|---|---|
+| `POST` | `/runs` | start a run (202); body: `account`, `strategy`, optional `config` |
+| `GET` | `/runs?status=&limit=` | list runs |
+| `GET` | `/runs/{id}` | status, current node, research summary, posts, candidates with critiques, review state, usage, estimated cost, failure |
+| `GET` | `/runs/{id}/usage` | usage counts with `at_run_pricing` and `at_current_pricing` estimates |
+| `GET` | `/reviews/pending` | runs awaiting review with their candidates and critiques |
+| `POST` | `/runs/{id}/review` | `approve` / `reject` / `edit` / `regenerate` (+ `note`), 202 |
+| `POST` | `/runs/{id}/resume` | continue a `stalled` run from its checkpoint (never automatic) |
+| `GET` | `/health` | app and database status |
+
+```bash
+curl -s -X POST localhost:8000/runs -H 'content-type: application/json' -d '{
+  "account": {"id": "acct_demo", "handle": "@agentic_builder", "niche": "AI engineering"},
+  "strategy": {"account_id": "acct_demo", "pillars": ["agent engineering", "llm evaluation"],
+               "tone": "practical", "target_audience": "engineers shipping LLM features"}}'
+curl -s localhost:8000/reviews/pending
+curl -s -X POST localhost:8000/runs/$RUN/review -H 'content-type: application/json' \
+  -d '{"action": "regenerate", "note": "Lead with a concrete number.", "reviewer": "me"}'
+curl -s -X POST localhost:8000/runs/$RUN/review -H 'content-type: application/json' \
+  -d '{"action": "approve", "candidate_id": "'$CAND'", "reviewer": "me"}'
+curl -s localhost:8000/runs/$RUN/usage
+```
+
+Errors: 404 unknown run, 409 invalid state (e.g. reviewing a run that is not awaiting review,
+an unknown candidate, a spent regeneration budget), 422 invalid payload, 503 database or
+provider unavailable. Details: [docs/DATABASE.md](docs/DATABASE.md).
+
 ### Real LLM workflow (opt-in, costs money)
 
 ```bash
@@ -80,7 +121,8 @@ and prints a trace like this (from the deterministic demo; ids and text vary):
 Research uses synthetic fixture posts unless `RESEARCH_PROVIDER=x` is set. The X provider calls
 the official X API v2 recent-search endpoint with an app-only Bearer token (read-only), fetches
 one small page (`X_MAX_RESULTS_PER_QUERY`, default 10) and never paginates. Retrieval attempts
-per run are capped by `X_MAX_QUERIES_PER_RUN` (default 1). A rate limit (HTTP 429) fails the run
+per run are capped by `X_MAX_QUERIES_PER_RUN` (default 1); with a higher budget, a thin sample
+(fewer than 5 posts) is retried with a deterministically broadened query. A rate limit (HTTP 429) fails the run
 with the reset time recorded; nothing sleeps or retries automatically. Your query is kept
 verbatim; `-is:retweet` is appended to a separate effective query.
 
@@ -117,12 +159,16 @@ src/social_growth_agent/
   graph/          state, nodes, pure routing, builder, checkpoint serialization
   agents/         research, content, critic, prompts/*.md, deterministic fakes
   providers/      LLM + social-platform protocols, OpenAI adapter, x/ (X research), mocks/
-  services/       WorkflowService, factory, trace printer, demo, live_demo, x_research_demo
-  api/            FastAPI app factory
+  services/       WorkflowService, RunService (persisted runs), runtime, demos
+  persistence/    SQLAlchemy tables, Alembic migrations, recorder, usage ledger, checkpointer, sga-db
+  accounting/     price list (pricing.toml) and cost estimates
+  api/            FastAPI app: run, review, resume and usage endpoints
   evaluation/     critic evaluation harness
   observability/  structured logging, timing
 tests/
-docs/             ARCHITECTURE.md, ROADMAP.md
+docs/             ARCHITECTURE.md, DATABASE.md, ROADMAP.md
+pricing.toml      prices for cost estimates (blank by default; never in code)
+docker-compose.yml  local PostgreSQL only
 ```
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.

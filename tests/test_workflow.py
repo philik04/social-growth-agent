@@ -272,7 +272,6 @@ def test_invalid_output_error_type_is_an_abort_not_a_retry(account, strategy):
     [
         (ReviewAction.APPROVE, RunStatus.APPROVED),
         (ReviewAction.REJECT, RunStatus.REJECTED),
-        (ReviewAction.REGENERATE, RunStatus.REGENERATION_REQUESTED),
     ],
 )
 def test_resume_after_human_review(account, strategy, action, expected):
@@ -292,6 +291,44 @@ def test_resume_after_human_review(account, strategy, action, expected):
     assert result.state.review.status is ReviewStatus.DECIDED
     assert result.state.review.decision == decision
     assert node_path(result)[-1] == "human_review"
+
+
+def test_regenerate_starts_a_new_bounded_cycle_with_reviewer_notes(account, strategy):
+    llm = make_llm(always(P))
+    research = MockResearchProvider()
+    service = make_service(llm, research)
+    paused = service.start_run(account, strategy)
+    reviewed = set(paused.state.review.candidate_ids)
+    decision = ReviewDecision(
+        action=ReviewAction.REGENERATE, reviewer="philipp", note="shorter, more technical"
+    )
+
+    result = service.submit_review(paused.state.run_id, decision)
+
+    assert result.status is RunStatus.AWAITING_REVIEW
+    assert len(research.calls) == 1  # no new retrieval
+    new_ids = set(result.state.review.candidate_ids)
+    assert new_ids and not new_ids & reviewed
+    assert result.state.regeneration_rounds == 1
+    assert result.state.review_decisions == [decision]
+    content_request = [c for c in llm.calls if c.agent == "content"][-1]
+    assert content_request.payload["reviewer_notes"] == ["shorter, more technical"]
+    assert {i["candidate_id"] for i in content_request.payload["previous_critique"]} == reviewed
+    for cand in result.state.candidates_by_ids(list(new_ids)):
+        assert "shorter, more technical" in cand.content
+        assert cand.revises_candidate_id in reviewed
+
+
+def test_regeneration_is_bounded(account, strategy):
+    service = make_service(make_llm(always(P)))
+    run = service.start_run(account, strategy, RunConfig(max_regenerations=1))
+    regen = ReviewDecision(action=ReviewAction.REGENERATE, reviewer="p")
+    run = service.submit_review(run.state.run_id, regen)
+    assert run.status is RunStatus.AWAITING_REVIEW
+
+    with pytest.raises(InvalidReviewError, match="regeneration limit"):
+        service.submit_review(run.state.run_id, regen)
+    assert service.get_run(run.state.run_id).status is RunStatus.AWAITING_REVIEW
 
 
 def test_review_for_unknown_candidate_keeps_run_paused(account, strategy):

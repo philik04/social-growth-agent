@@ -107,7 +107,7 @@ def test_gate_best_score_threshold(account, strategy):
         (ReviewAction.EDIT, "critique_edit"),
         (ReviewAction.APPROVE, "__end__"),
         (ReviewAction.REJECT, "__end__"),
-        (ReviewAction.REGENERATE, "__end__"),
+        (ReviewAction.REGENERATE, "generate"),
     ],
 )
 def test_route_after_review_sends_edits_to_critique(account, strategy, action, expected):

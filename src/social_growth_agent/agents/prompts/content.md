@@ -10,6 +10,7 @@ Write the requested number of distinct post candidates that serve the account st
 - Content policy constraints enforced by the application (maximum length, allowed formats).
 - The generation attempt number.
 - On retries: critique of the previous attempt's candidates, including their ids, verdicts, issues, policy violations and suggested revisions.
+- After a human review: `reviewer_notes`, free-text guidance from the reviewer, together with the critique of the candidates they reviewed.
 
 # Output contract
 Return a CandidateBatch with one entry per candidate:
@@ -25,3 +26,4 @@ Return a CandidateBatch with one entry per candidate:
 - On retries, address every issue and policy violation in the critique. Improve the flagged posts rather than starting over on unrelated ideas.
 - Do not invent statistics, quotes, studies or results. Only use numbers that appear in the supplied findings, and phrase them as observations, not guarantees.
 - Candidates should differ from each other in hook or angle.
+- When `reviewer_notes` are present, a human reviewer rejected the previous candidates and asked for changes (for example "shorter", "more technical", "less promotional"). Follow every note unless it conflicts with the content policy or the strategy's topics to avoid; the policy and the avoided topics always win.

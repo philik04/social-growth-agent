@@ -14,10 +14,10 @@ def test_research_provider_is_deterministic_and_filters_by_query_phrase():
     first = MockResearchProvider().search(query)
     second = MockResearchProvider().search(query)
     assert first.posts == second.posts
-    assert [p.source_id for p in first.posts] == ["src_002", "src_005"]
+    assert [p.source_id for p in first.posts] == ["src_002", "src_005", "src_006"]
     assert all(p.query == '"llm evaluation"' for p in first.posts)
     assert first.fetch.requests_made == 0  # synthetic: no platform requests
-    assert first.fetch.posts_fetched == 2
+    assert first.fetch.posts_fetched == 3
 
 
 def test_publisher_assigns_sequential_ids_and_enforces_length():

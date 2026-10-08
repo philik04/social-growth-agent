@@ -2,6 +2,7 @@
 
 from social_growth_agent.graph.builder import DEFAULT_RETRY_POLICY, WorkflowGraph, build_graph
 from social_growth_agent.graph.dependencies import AgentSettings, Dependencies
+from social_growth_agent.graph.nodes import validate_review
 from social_growth_agent.graph.state import GraphState, RunConfig, StateUpdate
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "StateUpdate",
     "WorkflowGraph",
     "build_graph",
+    "validate_review",
 ]

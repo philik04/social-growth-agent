@@ -4,7 +4,8 @@ Used by the deterministic demo and by tests (``LLM_PROVIDER=fake``). They read t
 structured request payload, never randomness, so identical inputs always produce
 identical outputs. The content handler deliberately writes an unsupported claim on
 the first attempt, so a demo run exercises the critic -> regenerate loop, and on
-retries it revises the critiqued candidates (``revises_candidate_id``).
+retries it revises the critiqued candidates (``revises_candidate_id``). When reviewer
+notes are supplied it echoes the latest one, so tests can see they reached the prompt.
 """
 
 from collections import defaultdict
@@ -86,6 +87,8 @@ def fake_content(request: LLMRequest) -> CandidateBatch:
     attempt = int(str(request.payload.get("attempt", 1)))
     count = int(str(request.payload.get("count", 1)))
     audience = str(_dict(request, "strategy").get("target_audience", "builders"))
+    raw_notes = request.payload.get("reviewer_notes", [])
+    notes = [str(n) for n in raw_notes] if isinstance(raw_notes, list) else []
     drafts = []
     for i in range(count):
         finding = findings[i % len(findings)]
@@ -93,6 +96,8 @@ def fake_content(request: LLMRequest) -> CandidateBatch:
         claim = (
             "This is guaranteed to double your reach." if attempt == 1 else "Here's what worked."
         )
+        if notes:
+            claim = f"Here's what worked (reviewer: {notes[-1][:40]})."
         revises = str(previous[i]["candidate_id"]) if i < len(previous) else None
         drafts.append(
             CandidateDraft(

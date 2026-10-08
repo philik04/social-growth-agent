@@ -10,7 +10,12 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from social_growth_agent.config import AppSettings
-from social_growth_agent.providers import LLMProvider, LLMSettings, SocialResearchProvider
+from social_growth_agent.providers import (
+    LLMProvider,
+    LLMSettings,
+    SocialResearchProvider,
+    UsageSink,
+)
 
 type AgentName = Literal["research", "content", "critic"]
 
@@ -53,6 +58,8 @@ class Dependencies:
     research_provider: SocialResearchProvider
     agent_settings: AgentSettings = field(default_factory=AgentSettings)
     agent_llms: Mapping[AgentName, LLMProvider] = field(default_factory=dict)
+    usage_sink: UsageSink | None = None
+    """Records provider usage at call time (Phase 4 persistence); None in pure in-memory use."""
 
     def llm_for(self, agent: AgentName) -> LLMProvider:
         return self.agent_llms.get(agent, self.llm)

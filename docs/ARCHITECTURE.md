@@ -36,7 +36,7 @@ Research -> Content generation -> Critic -> Human approval -> Publishing
 Strategy update  <-----------------  Analytics  <----------  Metrics collection
 ```
 
-Phases 1 to 3 implement research (from mock fixtures or live X) through human approval. The right half of the loop exists in
+Phases 1 to 4 implement research (from mock fixtures or live X) through human approval. The right half of the loop exists in
 the types (`PublishState`, `PostMetrics`, `PerformanceInsight`, `Experiment`) but has no nodes yet.
 
 ## 4. Agents and their contracts
@@ -94,7 +94,8 @@ and `min_best_score`, and aggregate or per-dimension thresholds would go here to
 ```mermaid
 graph TD;
   START([start]) --> retrieve
-  retrieve -.-> research
+  retrieve -.->|retry / broaden, within budget| retrieve
+  retrieve -.->|enough signal| research
   retrieve -.-> failed
   research -.-> generate
   research -.-> failed
@@ -104,7 +105,8 @@ graph TD;
   critic -.->|gate closed, attempts < max| generate
   critic -.->|gate closed, attempts = max| failed
   request_review --> human_review
-  human_review -.->|approve / reject / regenerate| END([end])
+  human_review -.->|approve / reject| END([end])
+  human_review -.->|regenerate with notes, bounded| generate
   human_review -.->|edit| critique_edit
   critique_edit -.-> request_review
   critique_edit -.-> failed
@@ -114,6 +116,35 @@ graph TD;
 `retrieve` (Phase 3) is the only node that talks to a social platform; `research` only
 interprets what `retrieve` stored. The split keeps retrieval and interpretation apart, and it
 means a retried or failed research LLM call never re-fetches (and re-bills) platform data.
+
+### Enough-signal loop (Phase 4)
+
+After every retrieval, `policies.assess_signal` counts the posts collected so far (merged across
+retrievals, first occurrence wins) and decides deterministically:
+
+- at least `RunConfig.min_signal_posts` (default 5): **proceed** to research;
+- fewer, and another request is allowed: **broaden** and retrieve again;
+- fewer, no request left: proceed if there is anything at all (the small-sample limitation is
+  stated), otherwise fail with `InsufficientSignalError`.
+
+Broadening is a fixed ladder (`policies.broadened_queries`): the original query, then without
+recency/author constraints, then without phrase quotes, then OR-ed with the strategy pillars.
+The original query is never modified; the ones used are recorded in
+`ResearchSource.broadened_queries`. Transient retrieval failures loop back the same way
+(`signal_decision=retry`). Both are bounded by `RunConfig.max_research_attempts` and by the
+provider's `max_requests_per_run` (`X_MAX_QUERIES_PER_RUN`), checked against the `ResearchFetch`
+records already in state, so every request is counted and none is invisible. With the default
+X budget of 1 request the loop never broadens, exactly as in Phase 3. Rate limits still end the
+run immediately, and nothing sleeps.
+
+### Regenerate with reviewer notes (Phase 4)
+
+`regenerate` no longer ends the run. `human_review` records the decision (with its note, at
+most 1000 characters) and starts a new generation cycle: `generate` receives the reviewed
+candidates with their latest critiques plus every reviewer note so far, and runs the normal
+critique/retry loop with a fresh `max_generation_attempts` budget. Research is not repeated.
+Regeneration rounds are bounded by `RunConfig.max_regenerations` (default 2); past the limit
+the decision is refused and the run stays paused. Reject is terminal.
 
 ### Retry feedback loop
 
@@ -144,13 +175,14 @@ The unsafe path, critic passes → human edits → publish, does not exist in th
 
 | Failure | Mechanism | Outcome |
 |---|---|---|
-| Connection error, 5xx, timeout (`TransientProviderError`); LLM rate limits | LangGraph `RetryPolicy` on provider-calling nodes | retried up to 3 attempts (`retrieve`: capped by the provider's request budget); then as below |
+| Connection error, 5xx, timeout (`TransientProviderError`); LLM rate limits | LangGraph `RetryPolicy` on LLM-calling nodes; for `retrieve`, the graph's own retrieval loop | retried up to 3 attempts (`retrieve`: within `max_research_attempts` and the provider's request budget, every attempt recorded); then as below |
 | X rate limit (`RateLimitedError`, HTTP 429) | not transient: never retried, never slept on | reset time recorded in the error and in `research_fetches`; run fails |
 | Any provider error left after retries, or a non-retryable one (auth, 4xx, malformed response) | node `error_handler` (`provider_error_handler`) | `RunError` recorded, `status=failed`, `goto failed`. `start_run` returns normally. |
 | Invalid, truncated or filtered output, empty result, refusal, contract violation (`RunAbortError`) | `instrument` wrapper | `RunError` recorded, routed to `failed`, not retried |
-| Empty research results | `InsufficientSignalError` from `retrieve` | run fails before any LLM call; the fetch is recorded |
+| No research results after every allowed retrieval | `InsufficientSignalError` from `retrieve` | run fails before any LLM call; every fetch is recorded |
 | Missing API key or bearer token | `ConfigurationError` at startup | no run is created |
-| Bad review decision | `InvalidReviewError` to caller | run stays paused |
+| Bad review decision | `InvalidReviewError` to caller (HTTP 409) | run stays paused |
+| Process dies mid-run | checkpoint written after every step (`durability="sync"`) | run flagged `stalled` at next startup; `POST /runs/{id}/resume` continues from the last checkpoint |
 
 There is no silent fallback to fake content. `LLM_PROVIDER=fake` and `RESEARCH_PROVIDER=mock`
 must be chosen explicitly (mock is the research default; X is opt-in). A failing X call is never
@@ -278,13 +310,14 @@ Requested fields only: `tweet.fields=created_at,author_id,lang,public_metrics`,
 | Control | Default | Where enforced |
 |---|---|---|
 | `X_MAX_RESULTS_PER_QUERY` | 10 (API minimum; range 10..100) | `build_search_request` caps `max_results` |
-| `X_MAX_QUERIES_PER_RUN` | 1 (range 1..5) | `retrieval_retry_policy` caps `retrieve` attempts (first try + retries) |
+| `X_MAX_QUERIES_PER_RUN` | 1 (range 1..5) | the `retrieve` loop: retries and broadening stop when the recorded requests reach it |
 | Pagination | none | one request per `search`; `next_token` is ignored |
 | Rate limits | never retried | `RateLimitedError` is not transient |
 | Empty results | no LLM call | `retrieve` fails the run |
 
 `ResearchFetch` records `requests_made`, `posts_fetched` (post reads) and `users_fetched` (user
-objects from the expansion). These are resource counts only; no prices exist in code.
+objects from the expansion). These are resource counts only; no prices exist in code. Phase 4
+prices them from `pricing.toml` as labelled estimates (see section 8b).
 
 ### Failure handling (X)
 
@@ -310,12 +343,42 @@ effective query, requests, posts, latency, outcome and error category; never cre
 limitation below 20 posts, a missing-impressions limitation when any post lacks impressions, and
 the synthetic-data limitation for mock data.
 
+## 8b. Persistence and the run API (Phase 4)
+
+Two stores, with separate jobs (details and schema in [DATABASE.md](DATABASE.md)):
+
+- **LangGraph checkpoints** (`PostgresSaver`, same allowlisted serializer as before) are the
+  source of truth for execution: where a run is and what it resumes with.
+- **Domain tables** (SQLAlchemy 2, Alembic) are the queryable record: runs, posts, findings and
+  their evidence, candidates, critiques, review decisions, events, errors, and the usage ledger.
+  `RunRecorder` projects graph state into them after every step; records are immutable and keyed
+  by id, so projection is idempotent. `UsageLedger` (a `UsageSink` the graph calls after every
+  node attempt) writes `ResearchFetch` and `LLMCall` rows at call time, including for attempts
+  that fail.
+
+Provenance is enforced by the database too: `finding_evidence (run_id, source_id)` references
+`source_posts`, so evidence can only cite a post the same run retrieved.
+
+`RunService` owns the use cases; FastAPI endpoints only translate HTTP to it. Runs execute on
+a thread pool (`API_MAX_CONCURRENT_RUNS`), so `POST /runs` and `POST /runs/{id}/review` return
+202. A review is validated against the paused checkpoint under a row lock before it is
+accepted, so an invalid or duplicate decision never consumes the pending review. At startup,
+runs a dead process left `queued`/`running` are only flagged `stalled`: no provider is called
+until someone sends `POST /runs/{id}/resume`.
+
+Costs: usage counts are canonical. Prices live only in `pricing.toml`; each run stores the
+exact price list it was estimated with (`pricing_versions`, id `<version>:<content hash>`), so
+`/runs/{id}/usage` returns both `at_run_pricing` (reproducible) and `at_current_pricing`. Every
+estimate is labelled `estimated`, carries the price list's version, `as_of` and currency, and
+has no total when any needed price is missing.
+
 ## 9. Layering
 
 ```
 api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
-                         \          \-> policies
-                          \-> policies
+          |   \          \          \-> policies
+          |    \          \-> policies
+          |     \-> persistence (tables, recorder, ledger, checkpointer)  accounting (prices, estimates)
                      models  <- everything      config -> services.factory, providers.factory
 ```
 
@@ -333,7 +396,6 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
 
 See [ROADMAP.md](ROADMAP.md). Next structural additions:
 
-- the `research → enough_signal? → broaden → research` loop, bounded by `max_research_attempts`;
-- `publish → wait_for_metrics → analyze → update_strategy` after approval;
-- a Postgres checkpointer and SQLAlchemy tables for runs, candidates, critiques, decisions,
-  LLM calls, posts and metrics.
+- `publish → wait_for_metrics → analyze → update_strategy` after approval, with publish
+  idempotency keys stored in the Phase 4 tables;
+- metric snapshot tables joined to the existing candidate → critique → finding → post chain.

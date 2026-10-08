@@ -41,7 +41,13 @@ FAST_RETRY = RetryPolicy(
     max_attempts=3, initial_interval=0.0, jitter=False, retry_on=TransientProviderError
 )
 
-_CREDENTIAL_ENV = ("OPENAI_API_KEY", "X_BEARER_TOKEN", "LLM_PROVIDER", "RESEARCH_PROVIDER")
+_CREDENTIAL_ENV = (
+    "OPENAI_API_KEY",
+    "X_BEARER_TOKEN",
+    "LLM_PROVIDER",
+    "RESEARCH_PROVIDER",
+    "DATABASE_URL",
+)
 
 
 @pytest.fixture(autouse=True)

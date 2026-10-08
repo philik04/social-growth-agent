@@ -88,10 +88,17 @@ def test_research_agent_converts_provider_output_into_domain_state(account, stra
     assert brief.confidence is Confidence.MEDIUM
     assert brief.source.provider == "mock_fixtures"
     assert brief.source.synthetic is True
-    assert set(brief.source.source_ids) == {"src_001", "src_002", "src_003", "src_005"}
+    assert set(brief.source.source_ids) == {
+        "src_001",
+        "src_002",
+        "src_003",
+        "src_005",
+        "src_006",
+        "src_007",
+    }
     assert brief.limitations == [
         "Only five posts.",
-        small_sample_limitation(4),
+        small_sample_limitation(6),
         SYNTHETIC_LIMITATION,
     ]
     request = llm.calls[0]

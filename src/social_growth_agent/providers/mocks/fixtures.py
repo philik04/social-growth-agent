@@ -95,4 +95,26 @@ FIXTURE_POSTS: tuple[SourcePost, ...] = (
         reposts=120,
         quotes=6,
     ),
+    _post(
+        "src_006",
+        "evals_eng",
+        "Our eval harness caught a prompt regression before release. Small golden set, "
+        "big win. #LLMEvaluation",
+        impressions=19_000,
+        likes=410,
+        replies=18,
+        reposts=75,
+        quotes=4,
+    ),
+    _post(
+        "src_007",
+        "agent_ops",
+        "Tool timeouts were 60% of our agent failures. Budgets per tool call fixed most of "
+        "it. #AgentEngineering",
+        impressions=23_000,
+        likes=530,
+        replies=37,
+        reposts=95,
+        quotes=11,
+    ),
 )

@@ -37,6 +37,7 @@ from social_growth_agent.models.research import (
     ResearchQuery,
     ResearchSource,
     SearchResult,
+    SignalDecision,
     SourcePost,
 )
 from social_growth_agent.models.review import (
@@ -102,6 +103,7 @@ __all__ = [
     "RunError",
     "RunStatus",
     "SearchResult",
+    "SignalDecision",
     "SourcePost",
     "TokenUsage",
     "ToneMatch",

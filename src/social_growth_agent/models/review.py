@@ -6,7 +6,7 @@ from typing import Self
 
 from pydantic import Field, model_validator
 
-from social_growth_agent.models.base import DomainModel, utc_now
+from social_growth_agent.models.base import DomainModel, new_id, utc_now
 from social_growth_agent.models.content import ContentCandidate
 from social_growth_agent.models.critique import Critique
 
@@ -39,12 +39,16 @@ class ReviewRequest(DomainModel):
 
 
 class ReviewDecision(DomainModel):
+    id: str = Field(default_factory=lambda: new_id("dec"))
     action: ReviewAction
     candidate_id: str | None = None
     edited_content: str | None = None
     reviewer: str
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=1000)
     decided_at: datetime = Field(default_factory=utc_now)
+    resulting_candidate_id: str | None = Field(
+        default=None, description="Set by the application for 'edit': the new candidate's id."
+    )
 
     @model_validator(mode="after")
     def _check_action_fields(self) -> Self:

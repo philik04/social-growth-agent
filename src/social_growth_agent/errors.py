@@ -11,6 +11,8 @@ The split matters for control flow:
   the node wrapper records them and the run ends as failed.
 - ``InvalidReviewError`` is raised back to the caller and leaves the run paused.
 - ``ConfigurationError`` is raised at startup, before any run exists.
+- ``InvalidRunStateError`` (HTTP 409) and ``DatabaseUnavailableError`` (HTTP 503) come
+  from the run service (Phase 4).
 
 Errors raised around an LLM call carry ``llm_call`` metadata, and errors raised during
 research carry ``research_fetch`` metadata, so the failure can be recorded in the run
@@ -92,3 +94,11 @@ class InvalidReviewError(SocialGrowthError):
 
 class RunNotFoundError(SocialGrowthError):
     """No graph run exists for the given id."""
+
+
+class InvalidRunStateError(SocialGrowthError):
+    """The run exists but is not in a state that allows the requested operation."""
+
+
+class DatabaseUnavailableError(SocialGrowthError):
+    """The database could not be reached. Never carries the connection URL."""

@@ -1,7 +1,7 @@
 """Content Agent: drafts post candidates from research, strategy, policy and critique."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field, JsonValue
 
@@ -50,6 +50,8 @@ class GenerationContext:
     attempt: int
     count: int
     feedback: list[tuple[ContentCandidate, Critique]]
+    reviewer_notes: list[str] = field(default_factory=list)
+    """Human reviewer guidance from 'regenerate' decisions (Phase 4), oldest first."""
 
 
 @dataclass(frozen=True)
@@ -82,10 +84,13 @@ class ContentAgent:
                 [o.model_dump(mode="json") for o in ctx.brief.opportunities] if ctx.brief else []
             ),
             "previous_critique": [_feedback_item(c, k) for c, k in ctx.feedback],
+            "reviewer_notes": list(ctx.reviewer_notes),
         }
         header = f"Generation attempt {ctx.attempt}. Write exactly {ctx.count} candidates."
         if ctx.feedback:
             header += " Revise using the previous critique below."
+        if ctx.reviewer_notes:
+            header += " A human reviewer asked for changes; follow the reviewer notes below."
         return LLMRequest(
             agent=self.name,
             task="content.generate",

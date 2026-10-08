@@ -33,14 +33,17 @@ from social_growth_agent.models import (
     ResearchFinding,
     ResearchQuery,
     ResearchSource,
+    ReviewAction,
+    ReviewDecision,
     ReviewState,
     RunError,
     RunStatus,
+    SignalDecision,
     SourcePost,
     new_id,
     utc_now,
 )
-from social_growth_agent.policies import ContentPolicy, CriticGate
+from social_growth_agent.policies import DEFAULT_MIN_SIGNAL_POSTS, ContentPolicy, CriticGate
 
 
 class RunConfig(BaseModel):
@@ -50,8 +53,12 @@ class RunConfig(BaseModel):
 
     max_generation_attempts: int = Field(default=3, ge=1, le=10)
     candidates_per_attempt: int = Field(default=3, ge=1, le=10)
-    max_research_attempts: int = Field(default=2, ge=1, le=5)
+    max_research_attempts: int = Field(
+        default=3, ge=1, le=5, description="Retrievals per run (retries and broadening)."
+    )
+    min_signal_posts: int = Field(default=DEFAULT_MIN_SIGNAL_POSTS, ge=1, le=100)
     max_edit_rounds: int = Field(default=3, ge=0, le=10)
+    max_regenerations: int = Field(default=2, ge=0, le=5)
     research_query: ResearchQuery | None = Field(
         default=None, description="Explicit research query; defaults to the strategy pillars."
     )
@@ -86,11 +93,19 @@ class GraphState(BaseModel):
     # Control
     status: RunStatus = RunStatus.RUNNING
     research_attempts: int = Field(default=0, ge=0)
+    signal_decision: SignalDecision | None = None
+    broaden_step: int = Field(default=0, ge=0)
     generation_attempts: int = Field(default=0, ge=0)
+    generation_cycle_start: int = Field(
+        default=0, ge=0, description="generation_attempts when the current cycle began."
+    )
+    regeneration_rounds: int = Field(default=0, ge=0)
+    pending_regeneration: bool = False
     errors: Annotated[list[RunError], operator.add] = Field(default_factory=list)
     events: Annotated[list[NodeEvent], operator.add] = Field(default_factory=list)
     llm_calls: Annotated[list[LLMCall], operator.add] = Field(default_factory=list)
     research_fetches: Annotated[list[ResearchFetch], operator.add] = Field(default_factory=list)
+    review_decisions: Annotated[list[ReviewDecision], operator.add] = Field(default_factory=list)
 
     def current_candidates(self) -> list[ContentCandidate]:
         """Model-generated candidates of the latest attempt (human edits excluded)."""
@@ -100,6 +115,28 @@ class GraphState(BaseModel):
             if c.generation_attempt == self.generation_attempts
             and c.origin is CandidateOrigin.GENERATED
         ]
+
+    def cycle_attempts(self) -> int:
+        """Generation attempts in the current cycle (a reviewer's regenerate starts a new one)."""
+        return self.generation_attempts - self.generation_cycle_start
+
+    def requests_used(self) -> int:
+        return sum(f.requests_made for f in self.research_fetches)
+
+    def reviewer_notes(self) -> list[str]:
+        """Notes from every regenerate decision, oldest first."""
+        return [
+            d.note for d in self.review_decisions if d.action is ReviewAction.REGENERATE and d.note
+        ]
+
+    def reviewed_feedback(self) -> list[tuple[ContentCandidate, Critique]]:
+        """Candidates the reviewer saw (and asked to regenerate) with their latest critiques."""
+        pairs = []
+        for candidate in self.candidates_by_ids(self.review.candidate_ids):
+            critique = self.latest_critique(candidate.id)
+            if critique is not None:
+                pairs.append((candidate, critique))
+        return pairs
 
     def current_critiques(self) -> list[Critique]:
         return [c for c in self.critiques if c.generation_attempt == self.generation_attempts]
@@ -148,8 +185,14 @@ class StateUpdate(TypedDict, total=False):
     publish: PublishState
     status: RunStatus
     research_attempts: int
+    signal_decision: SignalDecision | None
+    broaden_step: int
     generation_attempts: int
+    generation_cycle_start: int
+    regeneration_rounds: int
+    pending_regeneration: bool
     errors: list[RunError]
     events: list[NodeEvent]
     llm_calls: list[LLMCall]
     research_fetches: list[ResearchFetch]
+    review_decisions: list[ReviewDecision]

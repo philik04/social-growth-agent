@@ -12,6 +12,7 @@ from social_growth_agent.providers.social import (
     SocialPublisher,
     SocialResearchProvider,
 )
+from social_growth_agent.providers.usage import UsageSink
 
 __all__ = [
     "LLMProvider",
@@ -22,4 +23,5 @@ __all__ = [
     "SocialPublisher",
     "SocialResearchProvider",
     "StructuredOutputStrategy",
+    "UsageSink",
 ]
