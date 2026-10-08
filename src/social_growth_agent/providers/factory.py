@@ -3,7 +3,7 @@ if 'openai' or 'x' is configured and cannot be built, startup fails."""
 
 from social_growth_agent.config import AppSettings
 from social_growth_agent.providers.llm import LLMProvider
-from social_growth_agent.providers.social import SocialResearchProvider
+from social_growth_agent.providers.social import SocialPublisher, SocialResearchProvider
 
 
 def build_llm_provider(settings: AppSettings) -> LLMProvider:
@@ -31,3 +31,15 @@ def build_research_provider(settings: AppSettings) -> SocialResearchProvider:
         max_results_per_query=settings.x_max_results_per_query,
         max_queries_per_run=settings.x_max_queries_per_run,
     )
+
+
+def build_publisher(settings: AppSettings) -> SocialPublisher:
+    """'x' needs all four X_PUBLISH_* user-context credentials; X_BEARER_TOKEN is never
+    used for publishing."""
+    if settings.publisher_provider == "mock":
+        from social_growth_agent.providers.mocks import MockPublisher
+
+        return MockPublisher()
+    from social_growth_agent.providers.x import XPublisher
+
+    return XPublisher.from_settings(settings)

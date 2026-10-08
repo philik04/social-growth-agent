@@ -39,10 +39,27 @@ Each phase ends with a working, tested system. Scope stays X-only until the loop
 - CI workflow with a PostgreSQL service; DB tests skip locally without `TEST_DATABASE_URL` and fail in CI.
 - **Exit:** met. A run survives a killed process between steps and between pause and resume (restart demo and DB tests). Still open: a labelled critic eval set, real prices in `pricing.toml`, and a live run of the broaden loop with `X_MAX_QUERIES_PER_RUN > 1`.
 
-## Phase 5: Publishing
-- X publisher adapter; `publish` node after approval; idempotency keys to prevent double posts.
-- Scheduling of approved posts into posting windows.
-- **Exit:** approved posts publish exactly once, and failures are visible and retryable.
+## Phase 5: Publishing (done)
+- `XPublisher` on OAuth 1.0a user context (`POST /2/tweets`), with publishing credentials kept
+  entirely separate from the read-only research bearer token.
+- Publishing is a separate explicit action, never a consequence of approval and never done in
+  an API endpoint: `POST /runs/{id}/publish` records one durable intent (unique idempotency key,
+  composite FK to the candidate of that run), and `sga-publisher-worker` claims due work with
+  `FOR UPDATE SKIP LOCKED` plus a lease and makes the single platform call.
+- A deterministic publish policy (run approved, this candidate approved, latest critique passed,
+  content policy still passes, no existing publication) decides eligibility; no LLM is involved.
+- Scheduling (`scheduled_for`, timezone required, up to 30 days ahead) and cancellation.
+- Outcomes X cannot confirm become `unknown` and are **never** retried automatically; only a
+  human resolve moves them on. Only failures proven to precede the request, and rate limits once
+  their reset has passed (`retry_not_before`, no sleeping), are retried automatically, bounded.
+- Started/finished ledgers: `publication_attempts` for every publish call and `provider_operations`
+  for every provider-calling node attempt, so an in-flight call stays visible after process death.
+- **Exit:** approved posts publish at most once per intent, every failure is an explicit state,
+  and live publishing is double-gated and limited to one harmless post.
+
+Not done in Phase 5 (deliberate): no timeline reconciliation of `unknown` publications
+(resolving is manual), no threads or media, no multi-account publishing (no OAuth 2.0 PKCE
+token store), no analytics.
 
 ## Phase 6: Analytics collection
 - `SocialAnalyticsProvider` for X; scheduled metric snapshots (e.g. 1h, 24h, 72h).

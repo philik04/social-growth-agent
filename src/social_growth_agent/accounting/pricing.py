@@ -28,6 +28,12 @@ class XPrices(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     post_read: Decimal | None = Field(default=None, ge=0, description="Per post read.")
+    post_create: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description="Per post created (publishing). Left unset where posting is not "
+        "billed per call; publish operations are then only counted.",
+    )
     user_read: Decimal | None = Field(default=None, ge=0, description="Per user object read.")
 
 

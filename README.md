@@ -3,12 +3,15 @@
 An agentic orchestration system that grows a creator's or founder's presence on X by running a
 closed loop: **research → generate → critique → human approval → publish → analyze → update strategy**.
 
-> Status: **Phase 4, persistent backend.** Runs live in PostgreSQL and survive process
+> Status: **Phase 5, publishing.** Approved content can be published to X, as a separate
+> explicit request: one durable publication intent, a lease-based worker that makes exactly
+> one platform call per attempt, scheduling, and an explicit `unknown` state for outcomes X
+> cannot confirm (never retried on its own). Runs live in PostgreSQL and survive process
 > restarts; a REST API starts runs, lists pending reviews and takes approve / reject / edit /
 > regenerate-with-notes decisions. Research can run on live X posts (opt-in); every finding
 > cites the X post ids that support it, checked in code and by database constraints. Usage is
 > recorded per call and priced as labelled estimates from a config file. See
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+> [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ## Why this is more than a multi-agent chatbot
 
@@ -69,6 +72,12 @@ TEST_DATABASE_URL=$DATABASE_URL uv run pytest          # full suite incl. DB tes
 | `GET` | `/reviews/pending` | runs awaiting review with their candidates and critiques |
 | `POST` | `/runs/{id}/review` | `approve` / `reject` / `edit` / `regenerate` (+ `note`), 202 |
 | `POST` | `/runs/{id}/resume` | continue a `stalled` run from its checkpoint (never automatic) |
+| `POST` | `/runs/{id}/publish` | record a publication intent for an approved candidate (202); optional `scheduled_for`. Never posts here |
+| `GET` | `/publications/{id}` | publication status, schedule, attempts, post id and URL |
+| `GET` | `/publications?status=&run_id=` | list publications |
+| `POST` | `/publications/{id}/retry` | queue a `failed` publication again, where the category allows it |
+| `POST` | `/publications/{id}/resolve` | close an `unknown` publication with what a human established |
+| `POST` | `/publications/{id}/cancel` | withdraw an unclaimed `scheduled`/`ready` publication |
 | `GET` | `/health` | app and database status |
 
 ```bash
@@ -84,9 +93,50 @@ curl -s -X POST localhost:8000/runs/$RUN/review -H 'content-type: application/js
 curl -s localhost:8000/runs/$RUN/usage
 ```
 
-Errors: 404 unknown run, 409 invalid state (e.g. reviewing a run that is not awaiting review,
-an unknown candidate, a spent regeneration budget), 422 invalid payload, 503 database or
-provider unavailable. Details: [docs/DATABASE.md](docs/DATABASE.md).
+Errors: 404 unknown run, publication or candidate, 409 invalid state (e.g. reviewing a run that
+is not awaiting review, an unknown candidate, a spent regeneration budget, a publication that
+already exists), 422 invalid payload or an out-of-bounds schedule, 503 database or provider
+unavailable. Details: [docs/DATABASE.md](docs/DATABASE.md).
+
+### Publishing approved content
+
+Approval is content approval only: it never posts. Publishing is a separate explicit request
+that records one durable intent, and a worker makes the single platform call.
+
+```bash
+# the whole lifecycle offline and free (mock publisher: nothing is posted anywhere)
+DATABASE_URL=postgresql://sga@localhost:5433/sga \
+  uv run python -m social_growth_agent.services.publish_demo
+
+curl -s -X POST localhost:8000/runs/$RUN/publish -H 'content-type: application/json' \
+  -d '{"candidate_id": "'$CAND'", "requested_by": "me"}'        # 202, status "ready"
+uv run sga-publisher-worker --once                               # the only call to the platform
+curl -s localhost:8000/publications/$PUB                         # published, with the post URL
+```
+
+`sga-publisher-worker` polls every `PUBLISHER_POLL_SECONDS`, claims due publications with
+`FOR UPDATE SKIP LOCKED` and a lease (so two workers never publish the same row), and writes a
+started attempt row before each call. Outcomes X cannot confirm (a timeout after sending, a
+5xx, a worker dying mid-call) become `unknown` and are **never** retried automatically; a human
+resolves them. A rate limit (429) with a reset time goes back to `ready` behind
+`retry_not_before`: the worker skips it until the reset and retries it then, without sleeping,
+bounded by `PUBLISH_MAX_ATTEMPTS`. Auth failures wait for a manual retry. Exactly-once delivery
+is not claimed: `POST /2/tweets` has no idempotency key.
+
+### Live publishing (opt-in, creates ONE real post)
+
+```bash
+RUN_LIVE_X_PUBLISH_TESTS=1 CONFIRM_LIVE_X_PUBLISH=YES PUBLISHER_PROVIDER=x \
+  X_PUBLISH_API_KEY=... X_PUBLISH_API_SECRET=... \
+  X_PUBLISH_ACCESS_TOKEN=... X_PUBLISH_ACCESS_TOKEN_SECRET=... \
+  DATABASE_URL=postgresql://sga@localhost:5433/sga \
+  uv run python -m social_growth_agent.services.x_publish_demo
+```
+
+Both gates plus a typed `publish` on the terminal are required; credentials being configured is
+never enough, ordinary tests never post, and nothing is deleted afterwards. These four
+user-context credentials are separate from the read-only `X_BEARER_TOKEN` used for research —
+an app-only token cannot post. See [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ### Real LLM workflow (opt-in, costs money)
 
@@ -155,18 +205,18 @@ run = service.submit_review(run.state.run_id, decision)  # approve / reject / ed
 src/social_growth_agent/
   config.py       settings from env / .env
   models/         domain objects (Pydantic, immutable)
-  policies/       content policy (hard rules), critic gate, human edit policy, research rules
+  policies/       content policy (hard rules), critic gate, human edit policy, research + publish rules
   graph/          state, nodes, pure routing, builder, checkpoint serialization
   agents/         research, content, critic, prompts/*.md, deterministic fakes
-  providers/      LLM + social-platform protocols, OpenAI adapter, x/ (X research), mocks/
-  services/       WorkflowService, RunService (persisted runs), runtime, demos
-  persistence/    SQLAlchemy tables, Alembic migrations, recorder, usage ledger, checkpointer, sga-db
+  providers/      LLM + social-platform protocols, OpenAI adapter, x/ (research + publishing), mocks/
+  services/       WorkflowService, RunService, PublicationService, PublisherWorker, runtime, demos
+  persistence/    SQLAlchemy tables, Alembic migrations, recorder, usage/operation ledgers, publications, checkpointer, sga-db
   accounting/     price list (pricing.toml) and cost estimates
-  api/            FastAPI app: run, review, resume and usage endpoints
+  api/            FastAPI app: run, review, resume, usage and publication endpoints
   evaluation/     critic evaluation harness
   observability/  structured logging, timing
 tests/
-docs/             ARCHITECTURE.md, DATABASE.md, ROADMAP.md
+docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ROADMAP.md
 pricing.toml      prices for cost estimates (blank by default; never in code)
 docker-compose.yml  local PostgreSQL only
 ```

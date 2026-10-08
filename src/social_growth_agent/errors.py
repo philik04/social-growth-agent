@@ -13,6 +13,10 @@ The split matters for control flow:
 - ``ConfigurationError`` is raised at startup, before any run exists.
 - ``InvalidRunStateError`` (HTTP 409) and ``DatabaseUnavailableError`` (HTTP 503) come
   from the run service (Phase 4).
+- ``PublishError`` subclasses (Phase 5) are raised by publishers and classify what is
+  known about an external post-create call: definitely rejected, definitely not sent,
+  or outcome unknown. The publisher worker turns them into publication states; none of
+  them is retried by the graph (publishing does not run in the graph).
 
 Errors raised around an LLM call carry ``llm_call`` metadata, and errors raised during
 research carry ``research_fetch`` metadata, so the failure can be recorded in the run
@@ -21,6 +25,7 @@ trace. Messages never contain credentials or request headers.
 
 from datetime import datetime
 
+from social_growth_agent.models.publishing import PublishFailureCategory
 from social_growth_agent.models.research import ResearchFetch
 from social_growth_agent.models.run import LLMCall, ProviderErrorCategory
 
@@ -102,3 +107,83 @@ class InvalidRunStateError(SocialGrowthError):
 
 class DatabaseUnavailableError(SocialGrowthError):
     """The database could not be reached. Never carries the connection URL."""
+
+
+class ResourceNotFoundError(SocialGrowthError):
+    """A publication or candidate does not exist (HTTP 404)."""
+
+
+class PublicationNotFoundError(ResourceNotFoundError):
+    pass
+
+
+class CandidateNotFoundError(ResourceNotFoundError):
+    pass
+
+
+class NotPublishableError(InvalidRunStateError):
+    """The deterministic publish policy refused the request (HTTP 409)."""
+
+
+class PublicationExistsError(InvalidRunStateError):
+    """A publication intent for this run and candidate already exists (HTTP 409)."""
+
+    def __init__(self, message: str, *, publication_id: str, status: str) -> None:
+        super().__init__(message)
+        self.publication_id = publication_id
+        self.status = status
+
+
+class InvalidScheduleError(SocialGrowthError):
+    """``scheduled_for`` is outside the allowed window (HTTP 422)."""
+
+
+# --- publishing (Phase 5) ---------------------------------------------------------------
+
+
+class PublishError(ProviderError):
+    """Base for publisher failures. ``failure_category`` drives the publication state;
+    messages are sanitized (status, category, the platform's short error title)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_category: PublishFailureCategory,
+        http_status: int | None = None,
+        latency_ms: float = 0.0,
+    ) -> None:
+        super().__init__(message)
+        self.failure_category = failure_category
+        self.http_status = http_status
+        self.latency_ms = latency_ms
+
+
+class PublishRejectedError(PublishError):
+    """The platform definitely did not create the post (4xx). Not retried automatically."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_category: PublishFailureCategory,
+        http_status: int | None = None,
+        latency_ms: float = 0.0,
+        rate_limit_reset_at: datetime | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            failure_category=failure_category,
+            http_status=http_status,
+            latency_ms=latency_ms,
+        )
+        self.rate_limit_reset_at = rate_limit_reset_at
+
+
+class PublishNotSentError(PublishError):
+    """The connection failed before the request was sent: safe to retry (bounded)."""
+
+
+class PublishOutcomeUnknownError(PublishError):
+    """The request may have reached the platform; whether a post exists is unknown.
+    Never retried automatically."""

@@ -12,13 +12,14 @@ from social_growth_agent.providers.social import (
     SocialPublisher,
     SocialResearchProvider,
 )
-from social_growth_agent.providers.usage import UsageSink
+from social_growth_agent.providers.usage import OperationLedger, UsageSink
 
 __all__ = [
     "LLMProvider",
     "LLMRequest",
     "LLMResponse",
     "LLMSettings",
+    "OperationLedger",
     "SocialAnalyticsProvider",
     "SocialPublisher",
     "SocialResearchProvider",

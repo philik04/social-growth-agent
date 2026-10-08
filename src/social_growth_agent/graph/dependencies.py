@@ -13,6 +13,7 @@ from social_growth_agent.config import AppSettings
 from social_growth_agent.providers import (
     LLMProvider,
     LLMSettings,
+    OperationLedger,
     SocialResearchProvider,
     UsageSink,
 )
@@ -60,6 +61,8 @@ class Dependencies:
     agent_llms: Mapping[AgentName, LLMProvider] = field(default_factory=dict)
     usage_sink: UsageSink | None = None
     """Records provider usage at call time (Phase 4 persistence); None in pure in-memory use."""
+    operation_ledger: OperationLedger | None = None
+    """Started/finished record of every provider-calling node attempt (Phase 5)."""
 
     def llm_for(self, agent: AgentName) -> LLMProvider:
         return self.agent_llms.get(agent, self.llm)

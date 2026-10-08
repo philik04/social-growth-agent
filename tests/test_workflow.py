@@ -289,7 +289,12 @@ def test_resume_after_human_review(account, strategy, action, expected):
     assert result.status is expected
     assert result.pending_review is None
     assert result.state.review.status is ReviewStatus.DECIDED
-    assert result.state.review.decision == decision
+    stored = result.state.review.decision
+    # The application records which review request the decision answered.
+    assert stored.reviewed_candidate_ids == paused.state.review.candidate_ids
+    assert stored == decision.model_copy(
+        update={"reviewed_candidate_ids": stored.reviewed_candidate_ids}
+    )
     assert node_path(result)[-1] == "human_review"
 
 
@@ -310,7 +315,11 @@ def test_regenerate_starts_a_new_bounded_cycle_with_reviewer_notes(account, stra
     new_ids = set(result.state.review.candidate_ids)
     assert new_ids and not new_ids & reviewed
     assert result.state.regeneration_rounds == 1
-    assert result.state.review_decisions == [decision]
+    [recorded] = result.state.review_decisions
+    assert set(recorded.reviewed_candidate_ids) == reviewed
+    assert recorded == decision.model_copy(
+        update={"reviewed_candidate_ids": recorded.reviewed_candidate_ids}
+    )
     content_request = [c for c in llm.calls if c.agent == "content"][-1]
     assert content_request.payload["reviewer_notes"] == ["shorter, more technical"]
     assert {i["candidate_id"] for i in content_request.payload["previous_critique"]} == reviewed

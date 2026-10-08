@@ -9,10 +9,17 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from social_growth_agent.accounting import LLMUsage, PriceList, UsageCounts, estimate_cost
+from social_growth_agent.accounting import (
+    LLMUsage,
+    PriceList,
+    PublishUsage,
+    UsageCounts,
+    estimate_cost,
+)
 from social_growth_agent.accounting.costs import ResearchUsage
 from social_growth_agent.errors import RunNotFoundError
 from social_growth_agent.models import RunStatus
+from social_growth_agent.persistence import publications as pubs
 from social_growth_agent.persistence.tables import (
     CandidateFindingRow,
     ContentCandidateRow,
@@ -161,6 +168,7 @@ def run_detail(session: Session, run_id: str, prices: PriceList | None) -> RunDe
         review=_review(session, row),
         usage=usage,
         cost=estimate_cost(usage, run_prices, basis="run_pricing"),
+        publications=pubs.run_publications(session, run_id),
     )
 
 
@@ -213,7 +221,12 @@ def usage_counts(session: Session, run_id: str) -> UsageCounts:
         .group_by(LLMCallRow.provider, LLMCallRow.model)
         .order_by(LLMCallRow.provider, LLMCallRow.model)
     )
+    publishing = [
+        PublishUsage(provider=provider, attempts=attempts, posts_created=created)
+        for provider, attempts, created in pubs.publish_operation_counts(session, run_id)
+    ]
     return UsageCounts(
+        publishing=publishing,
         research=[
             ResearchUsage(provider=p, fetches=n, requests=req, post_reads=posts, user_reads=users)
             for p, n, req, posts, users in research

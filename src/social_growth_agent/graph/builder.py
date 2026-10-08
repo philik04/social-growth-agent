@@ -27,8 +27,12 @@ from langgraph.types import RetryPolicy
 
 from social_growth_agent.errors import TransientProviderError
 from social_growth_agent.graph.checkpointing import in_memory_checkpointer
-from social_growth_agent.graph.dependencies import Dependencies
-from social_growth_agent.graph.instrumentation import instrument, provider_error_handler
+from social_growth_agent.graph.dependencies import AgentName, Dependencies
+from social_growth_agent.graph.instrumentation import (
+    OperationLabel,
+    instrument,
+    provider_error_handler,
+)
 from social_growth_agent.graph.nodes import WorkflowNodes
 from social_growth_agent.graph.routing import (
     route_after_critique,
@@ -62,20 +66,29 @@ def build_graph(
     graph = StateGraph(GraphState)
 
     sink = deps.usage_sink
+    ledger = deps.operation_ledger
+
+    def label(provider: str, operation: str) -> OperationLabel | None:
+        return None if ledger is None else OperationLabel(ledger, provider, operation)
+
+    def llm(agent: AgentName) -> str:
+        settings = deps.agent_settings.for_agent(agent)
+        return f"{settings.provider}:{settings.model}"
+
     # retrieve has no RetryPolicy: it retries inside the graph loop, where every
     # attempt is recorded in state and counted against the request budget.
-    for name, fn, policy in (
-        ("retrieve", nodes.retrieve, None),
-        ("research", nodes.research, retry_policy),
-        ("generate", nodes.generate, retry_policy),
-        ("critic", nodes.critic, retry_policy),
-        ("critique_edit", nodes.critique_edit, retry_policy),
+    for name, fn, policy, operation in (
+        ("retrieve", nodes.retrieve, None, label(deps.research_provider.source_name, "search")),
+        ("research", nodes.research, retry_policy, label(llm("research"), "llm")),
+        ("generate", nodes.generate, retry_policy, label(llm("content"), "llm")),
+        ("critic", nodes.critic, retry_policy, label(llm("critic"), "llm")),
+        ("critique_edit", nodes.critique_edit, retry_policy, label(llm("critic"), "llm")),
     ):
         # LangGraph documents `(state, error: NodeError)` error handlers but its
         # `StateNode` type alias does not include that signature yet.
         graph.add_node(  # type: ignore[call-overload]
             name,
-            instrument(name, fn, sink),
+            instrument(name, fn, sink, operation),
             retry_policy=policy,
             error_handler=provider_error_handler(name),
         )

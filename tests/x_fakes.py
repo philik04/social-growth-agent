@@ -86,6 +86,11 @@ def error(status: int, body: dict[str, Any] | None = None, **headers: str) -> ht
     return httpx.Response(status, json=body or {"title": "Error", "detail": "x"}, headers=headers)
 
 
+def created_post(post_id: str = "1908000000000000001", text: str = "hello") -> httpx.Response:
+    """A successful ``POST /2/tweets`` response."""
+    return httpx.Response(201, json={"data": {"id": post_id, "text": text}})
+
+
 class FakeX:
     """Serves replies in order (the last one repeats) and records every request."""
 

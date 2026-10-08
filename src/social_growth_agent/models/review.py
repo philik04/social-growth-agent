@@ -49,6 +49,11 @@ class ReviewDecision(DomainModel):
     resulting_candidate_id: str | None = Field(
         default=None, description="Set by the application for 'edit': the new candidate's id."
     )
+    reviewed_candidate_ids: list[str] = Field(
+        default_factory=list,
+        description="Snapshot of the review request this decision answered, set by the "
+        "application (Phase 5). Empty on decisions recorded before it existed.",
+    )
 
     @model_validator(mode="after")
     def _check_action_fields(self) -> Self:

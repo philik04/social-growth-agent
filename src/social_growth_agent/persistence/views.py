@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from social_growth_agent.accounting import CostEstimate, UsageCounts
-from social_growth_agent.models import RunStatus
+from social_growth_agent.models import PublicationStatus, RunStatus
 
 
 class View(BaseModel):
@@ -119,6 +119,7 @@ class DecisionView(View):
     candidate_id: str | None
     resulting_candidate_id: str | None
     edited_content: str | None
+    reviewed_candidate_ids: list[str]
     note: str | None
     reviewer: str
     decided_at: datetime
@@ -132,6 +133,52 @@ class ReviewView(View):
     decisions: list[DecisionView]
 
 
+class PublicationAttemptView(View):
+    """One publish attempt. ``finished_at`` is None while it is (or was) in flight."""
+
+    attempt: int
+    provider: str
+    outcome: str
+    started_at: datetime
+    finished_at: datetime | None
+    latency_ms: float | None
+    http_status: int | None
+    failure_category: str | None
+    failure_message: str | None
+    """Sanitized: status, category and the platform's short error title only."""
+    rate_limit_reset_at: datetime | None
+    provider_post_id: str | None
+
+
+class PublicationView(View):
+    id: str
+    run_id: str
+    candidate_id: str
+    platform: str
+    status: PublicationStatus
+    content: str
+    scheduled_for: datetime | None
+    requested_by: str | None
+    attempt_count: int
+    claimed_at: datetime | None
+    lease_expires_at: datetime | None
+    provider: str | None
+    provider_post_id: str | None
+    provider_post_url: str | None
+    started_at: datetime | None
+    published_at: datetime | None
+    failure_category: str | None
+    failure_message: str | None
+    rate_limit_reset_at: datetime | None
+    retry_not_before: datetime | None
+    """Set while a rate-limited publication waits in ``ready`` for its reset."""
+    resolved_by: str | None
+    resolution_note: str | None
+    created_at: datetime
+    updated_at: datetime
+    attempts: list[PublicationAttemptView] = []
+
+
 class RunDetail(View):
     run: RunSummary
     research_fetches: list[FetchView]
@@ -142,6 +189,8 @@ class RunDetail(View):
     usage: UsageCounts
     cost: CostEstimate
     """Estimated with the price list stored for this run."""
+    publications: list[PublicationView]
+    """Publication intents for this run; empty until someone requests publishing."""
 
 
 class PendingReview(View):

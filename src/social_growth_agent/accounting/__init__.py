@@ -4,6 +4,7 @@ from social_growth_agent.accounting.costs import (
     CostEstimate,
     CostLine,
     LLMUsage,
+    PublishUsage,
     UsageCounts,
     estimate_cost,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "LLMUsage",
     "ModelPrice",
     "PriceList",
+    "PublishUsage",
     "UsageCounts",
     "estimate_cost",
     "load_price_list",

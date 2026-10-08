@@ -1,7 +1,10 @@
 """SQLAlchemy table definitions: the queryable record of every run.
 
-These tables are a projection of graph state (see ``recorder.py``), plus two usage
-ledgers that are also written at call time. Execution state (where a run resumes)
+These tables are a projection of graph state (see ``recorder.py``), plus usage ledgers
+that are written at call time (``research_fetches``, ``llm_calls``, and since Phase 5 the
+started/finished ``provider_operations``). Publishing (Phase 5) is not graph state: the
+``publications`` and ``publication_attempts`` tables are written only by the publication
+service and the publisher worker. Execution state (where a run resumes)
 lives in LangGraph's checkpoint tables, which are not declared here.
 
 Provenance is enforced with foreign keys: a finding's evidence must reference a post
@@ -14,6 +17,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -23,6 +27,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -199,6 +204,10 @@ class FindingEvidenceRow(Base):
 
 class ContentCandidateRow(Base):
     __tablename__ = "content_candidates"
+    __table_args__ = (
+        # Target of the publications FK: a publication's candidate belongs to its run.
+        UniqueConstraint("run_id", "id", name="uq_content_candidates_run_id_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     run_id: Mapped[str] = mapped_column(_run_fk(), index=True)
@@ -259,6 +268,8 @@ class ReviewDecisionRow(Base):
     candidate_id: Mapped[str | None] = mapped_column(ForeignKey("content_candidates.id"))
     resulting_candidate_id: Mapped[str | None] = mapped_column(ForeignKey("content_candidates.id"))
     edited_content: Mapped[str | None] = mapped_column(Text)
+    reviewed_candidate_ids: Mapped[list[str]] = mapped_column(Json, default=list)
+    """The review request this decision answered; empty for pre-Phase 5 decisions."""
     note: Mapped[str | None] = mapped_column(Text)
     reviewer: Mapped[str] = mapped_column(String(128))
     decided_at: Mapped[datetime] = mapped_column(Timestamp)
@@ -288,6 +299,123 @@ class RunErrorRow(Base):
     message: Mapped[str] = mapped_column(Text)
     generation_attempt: Mapped[int] = mapped_column(Integer)
     occurred_at: Mapped[datetime] = mapped_column(Timestamp)
+
+
+PUBLICATION_STATUSES = (
+    "scheduled",
+    "ready",
+    "publishing",
+    "published",
+    "failed",
+    "unknown",
+    "cancelled",
+)
+
+
+class PublicationRow(Base):
+    """One durable publication intent per (run, candidate, platform).
+
+    Committed before any platform call. Retries reuse this row; the database refuses a
+    second intent for the same key. Runs with publications cannot be deleted: the
+    record of an external side effect must not disappear with its run.
+    """
+
+    __tablename__ = "publications"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "candidate_id"],
+            ["content_candidates.run_id", "content_candidates.id"],
+            name="fk_publications_run_candidate",
+        ),
+        UniqueConstraint("run_id", "candidate_id", "platform", name="uq_publications_target"),
+        CheckConstraint(
+            "status IN (" + ", ".join(f"'{s}'" for s in PUBLICATION_STATUSES) + ")",
+            name="status",
+        ),
+        CheckConstraint("attempt_count >= 0", name="attempt_count"),
+        Index("ix_publications_due", "status", "scheduled_for"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    candidate_id: Mapped[str] = mapped_column(String(64))
+    platform: Mapped[str] = mapped_column(String(16))
+    idempotency_key: Mapped[str] = mapped_column(String(64), unique=True)
+    content: Mapped[str] = mapped_column(Text)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))
+    scheduled_for: Mapped[datetime | None] = mapped_column(Timestamp)
+    requested_by: Mapped[str | None] = mapped_column(String(128))
+    claimed_by: Mapped[str | None] = mapped_column(String(128))
+    claimed_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    provider: Mapped[str | None] = mapped_column(String(32))
+    provider_post_id: Mapped[str | None] = mapped_column(String(64))
+    provider_post_url: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    published_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    failure_category: Mapped[str | None] = mapped_column(String(32))
+    failure_message: Mapped[str | None] = mapped_column(Text)
+    rate_limit_reset_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    # A rate-limited row requeued to ``ready`` is not claimable before this time.
+    retry_not_before: Mapped[datetime | None] = mapped_column(Timestamp)
+    resolved_by: Mapped[str | None] = mapped_column(String(128))
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        Timestamp, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PublicationAttemptRow(Base):
+    """Started ledger for publishing: inserted and committed *before* the platform call,
+    finalized after it. A row left at ``started`` with no ``finished_at`` means the
+    process died while the call may have been in flight."""
+
+    __tablename__ = "publication_attempts"
+    __table_args__ = (
+        UniqueConstraint("publication_id", "attempt", name="uq_publication_attempts_attempt"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    publication_id: Mapped[str] = mapped_column(ForeignKey("publications.id"), index=True)
+    attempt: Mapped[int] = mapped_column(Integer)
+    worker_id: Mapped[str] = mapped_column(String(128))
+    provider: Mapped[str] = mapped_column(String(32))
+    started_at: Mapped[datetime] = mapped_column(Timestamp)
+    finished_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    outcome: Mapped[str] = mapped_column(String(16))
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    failure_category: Mapped[str | None] = mapped_column(String(32))
+    failure_message: Mapped[str | None] = mapped_column(Text)
+    rate_limit_reset_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    provider_post_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class ProviderOperationRow(Base):
+    """Generalized started/finished ledger: one row per provider-calling node attempt.
+
+    Inserted (committed) when the node starts and finalized when it returns or raises.
+    A row with no ``finished_at`` is an operation whose process died mid-call. No usage
+    or cost is ever inferred for it: the usage ledgers only hold what providers reported.
+    """
+
+    __tablename__ = "provider_operations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(_run_fk(), index=True)
+    node: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(64))
+    operation: Mapped[str] = mapped_column(String(64))
+    generation_attempt: Mapped[int] = mapped_column(Integer)
+    started_at: Mapped[datetime] = mapped_column(Timestamp)
+    finished_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    outcome: Mapped[str] = mapped_column(String(16))
+    error_type: Mapped[str | None] = mapped_column(String(128))
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    usage_records: Mapped[int | None] = mapped_column(Integer)
 
 
 Index("ix_runs_created_at", RunRow.created_at.desc())

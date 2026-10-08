@@ -28,7 +28,7 @@ from social_growth_agent.persistence.checkpointer import CHECKPOINT_TABLES
 from social_growth_agent.persistence.db import sqlalchemy_url
 from social_growth_agent.persistence.migrate import upgrade
 from social_growth_agent.persistence.tables import APP_TABLES
-from social_growth_agent.providers.mocks import MockResearchProvider
+from social_growth_agent.providers.mocks import MockPublisher, MockResearchProvider
 from social_growth_agent.services.runs import InlineExecutor
 from social_growth_agent.services.runtime import Runtime, build_runtime
 from tests.conftest import FAST_RETRY
@@ -120,9 +120,14 @@ def make_runtime(clean_db: str) -> Iterator[Callable[..., Runtime]]:
         prices: PriceList = TEST_PRICES,
         agent_settings: AgentSettings | None = None,
         url: str | None = None,
+        publisher=None,
+        **overrides,
     ) -> Runtime:
         settings = AppSettings(
-            database_url=SecretStr(url or clean_db), llm_provider="fake", research_provider="mock"
+            database_url=SecretStr(url or clean_db),
+            llm_provider="fake",
+            research_provider="mock",
+            **overrides,
         )
         deps = Dependencies(
             llm=llm or build_fake_llm(),
@@ -130,7 +135,12 @@ def make_runtime(clean_db: str) -> Iterator[Callable[..., Runtime]]:
             agent_settings=agent_settings or AgentSettings(),
         )
         runtime = build_runtime(
-            settings, deps=deps, executor=InlineExecutor(), prices=prices, retry_policy=FAST_RETRY
+            settings,
+            deps=deps,
+            executor=InlineExecutor(),
+            prices=prices,
+            retry_policy=FAST_RETRY,
+            publisher=publisher or MockPublisher(),
         )
         created.append(runtime)
         return runtime

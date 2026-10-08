@@ -40,3 +40,7 @@ jobs:
         run: uv run pytest -m "not live" -rs
       - name: Restart demo (offline)
         run: uv run python -m social_growth_agent.services.restart_demo
+      - name: Publishing demo (offline; PUBLISHER_PROVIDER defaults to mock)
+        run: uv run python -m social_growth_agent.services.publish_demo
+      - name: The publisher worker publishes nothing when nothing was requested
+        run: uv run sga-publisher-worker --once && uv run sga-publisher-worker --dry-run

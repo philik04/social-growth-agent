@@ -372,13 +372,62 @@ exact price list it was estimated with (`pricing_versions`, id `<version>:<conte
 estimate is labelled `estimated`, carries the price list's version, `as_of` and currency, and
 has no total when any needed price is missing.
 
+## 8c. Publishing (Phase 5)
+
+Full detail in [PUBLISHING.md](PUBLISHING.md); the structural points:
+
+**Publishing is not in the graph.** The run graph still ends at content approval. A publish
+request can arrive days later, from another process, and may be retried or resolved by hand;
+mutual exclusion between workers and the uniqueness of the intent have to live in PostgreSQL
+anyway, which a LangGraph checkpoint cannot provide. So the pipeline
+`approved → publish request → (scheduled →) claimed → publishing → published` is a service
+workflow over durable rows:
+
+```
+API  ->  PublicationService.request()   policy check + INSERT intent (202); no platform call
+             |  publications row: scheduled | ready
+PublisherWorker (sga-publisher-worker, or an opt-in thread in the API)
+   claim due rows: FOR UPDATE SKIP LOCKED + lease
+   per row:  commit status=publishing + attempt(outcome=started)
+             SocialPublisher.publish(...)        <- the only external call
+             commit attempt finished; status=published | failed | unknown
+```
+
+The boundaries hold: the provider does the I/O (`XPublisher`), policy holds the rules
+(`policies/publishing.py`, deterministic, no LLM), persistence keeps the record
+(`publications`, `publication_attempts`), the scheduler claims due work, the API is transport.
+`GraphState.publish` is kept (every stored checkpoint contains it, and `GraphState` forbids
+unknown fields) but is deprecated and never written.
+
+**Separate credentials.** `X_BEARER_TOKEN` is app-only and read-only; publishing uses four
+`X_PUBLISH_*` values with OAuth 1.0a user-context signing (standard library, `providers/x/oauth1.py`),
+read by a different factory into a client that can only `POST /2/tweets`. An app-only token
+cannot post at all.
+
+**Honest delivery semantics.** `POST /2/tweets` has no idempotency key, so exactly-once is not
+available and is not claimed. A stable `idempotency_key = sha256("x:<run>:<candidate>")` with a
+`UNIQUE` constraint guarantees at most one intent (and so at most one pipeline) per approved
+candidate; retries reuse the row. Anything that may or may not have created a post — a timeout
+after sending, a 5xx, a 2xx without a post id, or a worker dying while `publishing` — becomes
+`unknown` and is never retried automatically. Only failures proven to precede the request
+(`ConnectError`, `ConnectTimeout`, `PoolTimeout`) go back to `ready`, and so does a 429 with a
+reset time, gated by `retry_not_before` so the poller skips it until the reset (nothing
+sleeps); both are bounded by `PUBLISH_MAX_ATTEMPTS`.
+
+**Started ledgers (Phase 4 debt, closed).** `publication_attempts` is committed before each
+platform call and finalized after it. Generalized, `provider_operations` records one
+started/finished row per provider-calling node attempt, written by `instrument()` through the
+`OperationLedger` port. An unfinished row means an external operation whose process died; no
+usage, tokens or cost are ever invented for it.
+
 ## 9. Layering
 
 ```
 api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
           |   \          \          \-> policies
           |    \          \-> policies
-          |     \-> persistence (tables, recorder, ledger, checkpointer)  accounting (prices, estimates)
+          |     \-> persistence (tables, recorder, ledgers, publications, checkpointer)  accounting (prices, estimates)
+          \-> publisher worker -> providers (SocialPublisher) + policies (publish rules)
                      models  <- everything      config -> services.factory, providers.factory
 ```
 
@@ -396,6 +445,6 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
 
 See [ROADMAP.md](ROADMAP.md). Next structural additions:
 
-- `publish → wait_for_metrics → analyze → update_strategy` after approval, with publish
-  idempotency keys stored in the Phase 4 tables;
+- `wait_for_metrics → analyze → update_strategy` after a published post, joined to the
+  Phase 5 `publications` rows by `provider_post_id`;
 - metric snapshot tables joined to the existing candidate → critique → finding → post chain.

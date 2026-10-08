@@ -18,6 +18,7 @@ from social_growth_agent.persistence.checkpointer import CHECKPOINT_TABLES
 from social_growth_agent.persistence.db import sqlalchemy_url
 from social_growth_agent.persistence.migrate import alembic_config, current_revision, upgrade
 from social_growth_agent.persistence.tables import APP_TABLES, Base
+from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.runs import InlineExecutor, RunService
 from social_growth_agent.services.runtime import Runtime
 from social_growth_agent.services.workflow import WorkflowService
@@ -100,7 +101,13 @@ def test_unreachable_database_returns_503_without_leaking_the_url(run_payload):
         checkpointer=InMemorySaver(),
     )
     service = RunService(workflow=workflow, db=db, prices=TEST_PRICES, executor=InlineExecutor())
-    runtime = Runtime(service=service, db=db, pool=_NoPool(), executor=InlineExecutor())
+    runtime = Runtime(
+        service=service,
+        publications=PublicationService(db),
+        db=db,
+        pool=_NoPool(),
+        executor=InlineExecutor(),
+    )
     with TestClient(create_app(runtime=_NoRecovery(runtime))) as client:
         for response in (client.get("/runs"), client.post("/runs", json=run_payload())):
             assert response.status_code == 503
@@ -120,6 +127,9 @@ class _NoRecovery:
     def __init__(self, runtime: Runtime) -> None:
         self.db = runtime.db
         self.service = _Wrapped(runtime.service)
+        self.publications = runtime.publications
+
+    def start_embedded_worker(self) -> None: ...
 
 
 class _Wrapped:
@@ -150,7 +160,7 @@ def test_fresh_database_migrates_to_head_with_checkpoint_tables(base_database_ur
     try:
         upgrade(url)
         upgrade(url)  # idempotent
-        assert current_revision(url) == "0001"
+        assert current_revision(url) == "0003"
         tables = {
             name
             for (name,) in sql(url, "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
@@ -172,7 +182,7 @@ def test_fresh_database_migrates_to_head_with_checkpoint_tables(base_database_ur
         }
         assert not set(APP_TABLES) & remaining
         upgrade(url)
-        assert current_revision(url) == "0001"
+        assert current_revision(url) == "0003"
     finally:
         drop_scratch_database(base_database_url, url)
 

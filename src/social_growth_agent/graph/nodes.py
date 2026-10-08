@@ -216,6 +216,10 @@ class WorkflowNodes:
             interrupt(_review_request(state).model_dump(mode="json"))
         )
         validate_review(state, decision)
+        # Snapshot which review request this answered, so provenance survives the run.
+        decision = decision.model_copy(
+            update={"reviewed_candidate_ids": list(state.review.candidate_ids)}
+        )
         if decision.action is ReviewAction.EDIT:
             return _apply_edit(state, decision)
         if decision.action is ReviewAction.REGENERATE:

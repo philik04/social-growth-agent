@@ -1,6 +1,6 @@
 import pytest
 
-from social_growth_agent.errors import ProviderError
+from social_growth_agent.errors import PublishRejectedError
 from social_growth_agent.models import PublishRequest, ResearchQuery
 from social_growth_agent.providers.mocks import (
     MockAnalyticsProvider,
@@ -22,9 +22,10 @@ def test_research_provider_is_deterministic_and_filters_by_query_phrase():
 
 def test_publisher_assigns_sequential_ids_and_enforces_length():
     publisher = MockPublisher()
-    post = publisher.publish(PublishRequest(account_id="a", candidate_id="c", content="hello"))
-    assert post.platform_post_id == "mock-x-0001"
-    with pytest.raises(ProviderError):
+    first = publisher.publish(PublishRequest(account_id="a", candidate_id="c", content="hello"))
+    second = publisher.publish(PublishRequest(account_id="a", candidate_id="d", content="hi"))
+    assert int(second.provider_post_id) == int(first.provider_post_id) + 1
+    with pytest.raises(PublishRejectedError):
         publisher.publish(PublishRequest(account_id="a", candidate_id="c", content="x" * 281))
 
 

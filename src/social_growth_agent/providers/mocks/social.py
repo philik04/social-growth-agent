@@ -2,14 +2,19 @@
 
 import hashlib
 import re
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Iterable, Sequence
 
-from social_growth_agent.errors import ProviderError, TransientProviderError
+from social_growth_agent.errors import (
+    PublishRejectedError,
+    TransientProviderError,
+)
 from social_growth_agent.models import (
     FetchOutcome,
     PostMetrics,
-    PublishedPost,
+    PublishFailureCategory,
     PublishRequest,
+    PublishResult,
     ResearchFetch,
     ResearchQuery,
     SearchResult,
@@ -81,24 +86,53 @@ def _engagement(post: SourcePost) -> int:
     return (post.likes or 0) + 2 * (post.reposts or 0) + (post.replies or 0)
 
 
+type PublishScriptStep = BaseException | Callable[[PublishRequest], None] | None
+"""One scripted call: an exception to raise, a hook to run first (e.g. to simulate a
+crash or inspect the database mid-call), or ``None`` for an ordinary success."""
+
+
 class MockPublisher:
-    """Records published posts and returns sequential platform ids."""
+    """Deterministic in-memory publisher (the default). Never touches the network.
 
-    def __init__(self, max_post_length: int = 280) -> None:
+    Returns sequential numeric post ids, enforces the post length, and can be scripted
+    per call to raise publish errors, so every publication state is reachable offline.
+    """
+
+    platform = "x"
+    provider_name = "mock_publisher"
+
+    def __init__(
+        self, script: Iterable[PublishScriptStep] = (), *, max_post_length: int = 280
+    ) -> None:
         self._max_post_length = max_post_length
-        self.published: list[PublishedPost] = []
+        self._script = list(script)
+        self._lock = threading.Lock()
+        self.calls: list[PublishRequest] = []
+        self.published: list[PublishResult] = []
 
-    def publish(self, request: PublishRequest) -> PublishedPost:
+    def publish(self, request: PublishRequest) -> PublishResult:
+        with self._lock:
+            self.calls.append(request)
+            step = self._script.pop(0) if self._script else None
+        if isinstance(step, BaseException):
+            raise step
+        if step is not None:
+            step(request)
         if len(request.content) > self._max_post_length:
-            raise ProviderError(f"content exceeds {self._max_post_length} characters")
-        post = PublishedPost(
-            account_id=request.account_id,
-            candidate_id=request.candidate_id,
-            platform_post_id=f"mock-x-{len(self.published) + 1:04d}",
-            content=request.content,
-        )
-        self.published.append(post)
-        return post
+            raise PublishRejectedError(
+                f"content exceeds {self._max_post_length} characters (HTTP 400)",
+                failure_category=PublishFailureCategory.BAD_REQUEST,
+                http_status=400,
+            )
+        with self._lock:
+            post_id = str(1_900_000_000_000_000_000 + len(self.published) + 1)
+            result = PublishResult(
+                provider_post_id=post_id,
+                provider_post_url=f"https://x.invalid/mock/status/{post_id}",
+                http_status=201,
+            )
+            self.published.append(result)
+        return result
 
 
 class MockAnalyticsProvider:

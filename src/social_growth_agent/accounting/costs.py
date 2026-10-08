@@ -32,6 +32,17 @@ class ResearchUsage(BaseModel):
     user_reads: int = Field(ge=0)
 
 
+class PublishUsage(BaseModel):
+    """Publish operations for one run. Counted, never priced unless a per-post price is
+    configured: X does not charge per post create on the tiers we use."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    attempts: int = Field(ge=0, description="Platform post-create calls made.")
+    posts_created: int = Field(ge=0, description="Calls that definitely created a post.")
+
+
 class UsageCounts(BaseModel):
     """Canonical, provider-reported resource counts for one run."""
 
@@ -39,6 +50,7 @@ class UsageCounts(BaseModel):
 
     research: list[ResearchUsage] = Field(default_factory=list)
     llm: list[LLMUsage] = Field(default_factory=list)
+    publishing: list[PublishUsage] = Field(default_factory=list)
 
 
 class CostLine(BaseModel):
@@ -82,6 +94,12 @@ def estimate_cost(usage: UsageCounts, prices: PriceList, *, basis: str) -> CostE
         user_price = prices.x.user_read if r.provider == "x" else None
         lines.append(_line("post_reads", r.provider, r.post_reads, "post", post_price, free))
         lines.append(_line("user_reads", r.provider, r.user_reads, "user", user_price, free))
+    for pub in usage.publishing:
+        free = pub.provider in unbilled
+        create_price = prices.x.post_create if pub.provider == "x" else None
+        lines.append(
+            _line("posts_created", pub.provider, pub.posts_created, "post", create_price, free)
+        )
     for u in usage.llm:
         free = u.provider in unbilled
         price = prices.llm_price(u.provider, u.model)

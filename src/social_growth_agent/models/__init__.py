@@ -20,9 +20,14 @@ from social_growth_agent.models.critique import (
 )
 from social_growth_agent.models.insights import Experiment, ExperimentStatus, PerformanceInsight
 from social_growth_agent.models.publishing import (
+    ACTIVE_PUBLICATION_STATUSES,
+    AttemptOutcome,
     PostMetrics,
+    PublicationStatus,
     PublishedPost,
+    PublishFailureCategory,
     PublishRequest,
+    PublishResult,
     PublishState,
     PublishStatus,
 )
@@ -59,7 +64,9 @@ from social_growth_agent.models.run import (
 )
 
 __all__ = [
+    "ACTIVE_PUBLICATION_STATUSES",
     "Account",
+    "AttemptOutcome",
     "CandidateOrigin",
     "ClaimType",
     "Confidence",
@@ -85,7 +92,10 @@ __all__ = [
     "PostFormat",
     "PostMetrics",
     "ProviderErrorCategory",
+    "PublicationStatus",
+    "PublishFailureCategory",
     "PublishRequest",
+    "PublishResult",
     "PublishState",
     "PublishStatus",
     "PublishedPost",

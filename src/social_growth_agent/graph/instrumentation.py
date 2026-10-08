@@ -1,5 +1,6 @@
 """Node wrapper and error handler: timing, logging, and conversion of failures into run state."""
 
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from langgraph.errors import NodeError
@@ -15,8 +16,8 @@ from social_growth_agent.models import (
     RunStatus,
     utc_now,
 )
-from social_growth_agent.observability import get_logger, timed
-from social_growth_agent.providers import UsageSink
+from social_growth_agent.observability import Timer, get_logger, timed
+from social_growth_agent.providers import OperationLedger, UsageSink
 
 _log = get_logger("graph")
 
@@ -31,7 +32,21 @@ class ErrorHandlerFn(Protocol):
     def __call__(self, state: GraphState, error: NodeError) -> Command[Literal["failed"]]: ...
 
 
-def instrument(name: str, fn: NodeFn, usage_sink: UsageSink | None = None) -> NodeFn:
+@dataclass(frozen=True)
+class OperationLabel:
+    """What a provider-calling node is recorded as in the operation ledger."""
+
+    ledger: OperationLedger
+    provider: str
+    operation: str
+
+
+def instrument(
+    name: str,
+    fn: NodeFn,
+    usage_sink: UsageSink | None = None,
+    operation: OperationLabel | None = None,
+) -> NodeFn:
     """Wrap a node so every execution appends a ``NodeEvent``.
 
     ``RunAbortError`` is recorded in ``errors`` and flips status to FAILED, so the
@@ -41,28 +56,37 @@ def instrument(name: str, fn: NodeFn, usage_sink: UsageSink | None = None) -> No
 
     With a ``usage_sink``, every ``ResearchFetch`` and ``LLMCall`` the node produced is
     recorded before the node returns or raises, including on attempts that fail.
+
+    With an ``operation`` label, a started row is written before the node runs and
+    finalized afterwards (succeeded / aborted / failed). A process that dies mid-node
+    leaves the started row, so an in-flight external call is never invisible.
     """
 
     def run(state: GraphState) -> StateUpdate:
+        op_id = _start(operation, name, state)
         with timed() as timer:
             try:
                 update = fn(state)
                 outcome = "ok"
             except SocialGrowthError as exc:
-                _record(usage_sink, state.run_id, _error_usage(exc))
-                if not isinstance(exc, RunAbortError):
+                usage = _error_usage(exc)
+                _record(usage_sink, state.run_id, usage)
+                aborted = isinstance(exc, RunAbortError)
+                _finish(operation, op_id, "aborted" if aborted else "failed", exc, timer, usage)
+                if not aborted:
                     raise
                 _log.warning(
                     "node aborted", extra={"node": name, "run_id": state.run_id, "error": str(exc)}
                 )
                 update = _failure_update(name, state, exc)
                 outcome = "error"
+            except Exception as exc:
+                _finish(operation, op_id, "failed", exc, timer, ([], []))
+                raise
             else:
-                _record(
-                    usage_sink,
-                    state.run_id,
-                    (update.get("research_fetches", []), update.get("llm_calls", [])),
-                )
+                usage = (update.get("research_fetches", []), update.get("llm_calls", []))
+                _record(usage_sink, state.run_id, usage)
+                _finish(operation, op_id, "succeeded", None, timer, usage)
         update["events"] = [
             NodeEvent(
                 node=name,
@@ -141,3 +165,42 @@ def _record(sink: UsageSink | None, run_id: str, usage: Usage) -> None:
         sink.record(run_id, fetches, calls)
     except Exception:  # a sink must not fail the run; the checkpoint still holds usage
         _log.exception("usage sink failed", extra={"run_id": run_id})
+
+
+def _start(label: OperationLabel | None, node: str, state: GraphState) -> str | None:
+    if label is None:
+        return None
+    try:
+        return label.ledger.started(
+            state.run_id,
+            node=node,
+            provider=label.provider,
+            operation=label.operation,
+            generation_attempt=state.generation_attempts,
+        )
+    except Exception:  # never fails the run; the operation still runs and is recorded
+        _log.exception("operation ledger failed", extra={"run_id": state.run_id, "node": node})
+        return None
+
+
+def _finish(
+    label: OperationLabel | None,
+    op_id: str | None,
+    outcome: str,
+    exc: BaseException | None,
+    timer: Timer,
+    usage: Usage,
+) -> None:
+    if label is None or op_id is None:
+        return
+    fetches, calls = usage
+    try:
+        label.ledger.finished(
+            op_id,
+            outcome=outcome,
+            error_type=type(exc).__name__ if exc is not None else None,
+            latency_ms=timer.elapsed_ms(),
+            usage_records=len(fetches) + len(calls),
+        )
+    except Exception:
+        _log.exception("operation ledger failed", extra={"operation_id": op_id})

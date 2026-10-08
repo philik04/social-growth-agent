@@ -16,6 +16,8 @@ unbilled_providers = ["mock_fixtures", "fake"]
 [x]
 # post_read = 0.0   # price per post read (X API v2, pay-per-use)
 # user_read = 0.0   # price per user object read (expansions)
+# post_create = 0.0 # price per post created (publishing); unset where posting is not
+#                   # billed per call, in which case publishes are only counted
 
 [openai.models."gpt-4.1-mini"]
 # input_per_million = 0.0

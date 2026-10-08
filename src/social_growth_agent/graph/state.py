@@ -84,9 +84,11 @@ class GraphState(BaseModel):
     candidates: Annotated[list[ContentCandidate], operator.add] = Field(default_factory=list)
     critiques: Annotated[list[Critique], operator.add] = Field(default_factory=list)
 
-    # Decisions and downstream results (publish/metrics/insights unused until later phases)
+    # Decisions and downstream results (metrics/insights unused until later phases)
     review: ReviewState = Field(default_factory=ReviewState)
     publish: PublishState = Field(default_factory=PublishState)
+    """Deprecated, never written: publishing happens outside the graph (Phase 5) and its
+    state lives in the ``publications`` table. Kept so stored checkpoints validate."""
     metrics: list[PostMetrics] = Field(default_factory=list)
     insights: list[PerformanceInsight] = Field(default_factory=list)
 

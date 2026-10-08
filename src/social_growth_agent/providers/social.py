@@ -4,8 +4,8 @@ from typing import Protocol
 
 from social_growth_agent.models import (
     PostMetrics,
-    PublishedPost,
     PublishRequest,
+    PublishResult,
     ResearchQuery,
     SearchResult,
 )
@@ -33,7 +33,20 @@ class SocialResearchProvider(Protocol):
 
 
 class SocialPublisher(Protocol):
-    def publish(self, request: PublishRequest) -> PublishedPost: ...
+    """Creates one post. External I/O only: no policy, no persistence, no retries.
+
+    Implementations raise ``PublishError`` subclasses that say what is known about the
+    outcome: ``PublishRejectedError`` (definitely not created), ``PublishNotSentError``
+    (nothing reached the platform) or ``PublishOutcomeUnknownError`` (it may exist).
+    Errors never contain credentials, auth headers or raw provider responses.
+    """
+
+    platform: str
+    """The platform posts go to, e.g. ``"x"``."""
+    provider_name: str
+    """Recorded on every attempt, e.g. ``"x"`` or ``"mock_publisher"``."""
+
+    def publish(self, request: PublishRequest) -> PublishResult: ...
 
 
 class SocialAnalyticsProvider(Protocol):

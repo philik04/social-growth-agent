@@ -34,7 +34,7 @@ Checkpoints use the allowlisted serializer from Phase 1: only our own domain and
 can be deserialized. Domain rows are immutable records keyed by their ids and inserted with
 `ON CONFLICT DO NOTHING`, so the same state can be projected any number of times.
 
-## Schema (revision 0001)
+## Schema (revision 0003)
 
 All child tables reference `runs.id` with `ON DELETE CASCADE`.
 
@@ -51,13 +51,26 @@ All child tables reference `runs.id` with `ON DELETE CASCADE`.
 | `content_candidates` | `id`, `run_id`, attempt, `origin`, content, hook, format, `revises_candidate_id` → self, strategy id/version | |
 | `candidate_findings` | (`candidate_id`, `finding_id`) | Which findings a candidate is based on |
 | `critiques` | `id`, `run_id`, `candidate_id`, attempt, `verdict`, `recommended_verdict`, score, risks, `issues`, `policy_violations`, `suggested_revision` | Every critique is kept, including those of earlier cycles |
-| `review_decisions` | `id`, `run_id`, `action`, `candidate_id`, `resulting_candidate_id` (edit), `edited_content`, `note`, `reviewer`, `decided_at` | |
+| `review_decisions` | `id`, `run_id`, `action`, `candidate_id`, `resulting_candidate_id` (edit), `edited_content`, `reviewed_candidate_ids`, `note`, `reviewer`, `decided_at` | `reviewed_candidate_ids` (0002) is the review request the decision answered; empty for decisions recorded before Phase 5 |
 | `run_events` | `id`, `run_id`, node, outcome, attempt, duration | One row per node execution |
 | `run_errors` | `id`, `run_id`, node, `error_type`, message | |
+| `publications` (0002) | `id`, `run_id` → `runs`, (`run_id`, `candidate_id`) → `content_candidates` (`run_id`, `id`), `platform`, `idempotency_key` UNIQUE, UNIQUE (`run_id`, `candidate_id`, `platform`), `content`, `content_sha256`, `status` (CHECK), `scheduled_for`, `requested_by`, `claimed_by`, `claimed_at`, `lease_expires_at`, `attempt_count`, `provider`, `provider_post_id`, `provider_post_url`, `started_at`, `published_at`, `failure_category`, `failure_message`, `rate_limit_reset_at`, `retry_not_before` (0003), `resolved_by`, `resolution_note` | One durable publication intent; status: `scheduled`, `ready`, `publishing`, `published`, `failed`, `unknown`, `cancelled`. **No** `ON DELETE CASCADE`: the record of an external side effect must not vanish with its run |
+| `publication_attempts` (0002) | `id`, `publication_id`, UNIQUE (`publication_id`, `attempt`), `worker_id`, `provider`, `started_at`, `finished_at`, `latency_ms`, `outcome`, `http_status`, `failure_category`, `failure_message` (sanitized), `rate_limit_reset_at`, `provider_post_id` | Started ledger: committed before the platform call. `outcome='started'` with no `finished_at` means the process died mid-call |
+| `provider_operations` (0002) | `id`, `run_id`, `node`, `provider`, `operation`, `generation_attempt`, `started_at`, `finished_at`, `outcome`, `error_type`, `latency_ms`, `usage_records` | Started ledger for every provider-calling node attempt; unfinished rows carry no invented usage |
 
 The provenance chain is a plain join:
 `content_candidates → critiques`, `content_candidates → candidate_findings → research_findings
-→ finding_evidence → source_posts`, and `review_decisions → content_candidates`.
+→ finding_evidence → source_posts`, `review_decisions → content_candidates`, and
+`publications → content_candidates` (through a composite FK, so a publication's candidate
+always belongs to its run).
+
+Migrations: `0001` is never modified. `0002` adds the three publishing tables, the decision
+snapshot column and `UNIQUE (content_candidates.run_id, id)`. `0003` adds
+`publications.retry_not_before`, the gate a rate-limited row waits behind until its reset
+(NULL for existing rows). Both apply to an existing Phase 4
+database and to a fresh one (`sga-db upgrade`). A DB test upgrades a populated `0001` database
+and checks the existing rows survive, and another compares the migrated schema against the
+SQLAlchemy models.
 
 ## Resume
 
