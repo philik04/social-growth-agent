@@ -33,14 +33,41 @@ class ResearchUsage(BaseModel):
 
 
 class PublishUsage(BaseModel):
-    """Publish operations for one run. Counted, never priced unless a per-post price is
-    configured: X does not charge per post create on the tiers we use."""
+    """Publish operations for one run. Priced with ``x.post_create`` when configured.
+    X's pay-per-use pricing does bill post creation (per request, more for posts with a
+    URL); the price is left blank in ``pricing.toml`` until you set it, and the line is
+    then reported under ``missing_prices`` instead of being assumed free."""
 
     model_config = ConfigDict(frozen=True)
 
     provider: str
     attempts: int = Field(ge=0, description="Platform post-create calls made.")
     posts_created: int = Field(ge=0, description="Calls that definitely created a post.")
+
+
+class AnalyticsUsage(BaseModel):
+    """Metrics reads for one run's publications (Phase 6)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    requests: int = Field(
+        ge=0,
+        description="Provider requests that touched this run's posts. A batched request "
+        "counts for every run it touched, so this is not additive across runs.",
+    )
+    post_reads: int = Field(
+        ge=0,
+        description="Times a post of this run came back in a response: the billed unit. "
+        "An upper bound: the platform deduplicates repeated reads within a UTC day.",
+    )
+    snapshots: int = Field(ge=0, description="Metric snapshots stored.")
+    failed_requests: int = Field(ge=0)
+    unfinished_requests: int = Field(
+        ge=0,
+        description="Requests started but never finished (the process died); their reads, "
+        "if any, are not counted in post_reads.",
+    )
 
 
 class UsageCounts(BaseModel):
@@ -51,6 +78,7 @@ class UsageCounts(BaseModel):
     research: list[ResearchUsage] = Field(default_factory=list)
     llm: list[LLMUsage] = Field(default_factory=list)
     publishing: list[PublishUsage] = Field(default_factory=list)
+    analytics: list[AnalyticsUsage] = Field(default_factory=list)
 
 
 class CostLine(BaseModel):
@@ -99,6 +127,14 @@ def estimate_cost(usage: UsageCounts, prices: PriceList, *, basis: str) -> CostE
         create_price = prices.x.post_create if pub.provider == "x" else None
         lines.append(
             _line("posts_created", pub.provider, pub.posts_created, "post", create_price, free)
+        )
+    for a in usage.analytics:
+        # Same unit as research reads: a post returned by the X API. No separate
+        # analytics price is invented.
+        free = a.provider in unbilled
+        read_price = prices.x.post_read if a.provider == "x" else None
+        lines.append(
+            _line("analytics_post_reads", a.provider, a.post_reads, "post", read_price, free)
         )
     for u in usage.llm:
         free = u.provider in unbilled

@@ -36,8 +36,11 @@ Research -> Content generation -> Critic -> Human approval -> Publishing
 Strategy update  <-----------------  Analytics  <----------  Metrics collection
 ```
 
-Phases 1 to 4 implement research (from mock fixtures or live X) through human approval. The right half of the loop exists in
-the types (`PublishState`, `PostMetrics`, `PerformanceInsight`, `Experiment`) but has no nodes yet.
+Phases 1 to 4 implement research (from mock fixtures or live X) through human approval,
+Phase 5 publishing and Phase 6 metrics collection, both as workers over durable rows outside
+the graph. Analytics and strategy update (Phase 7) exist only in the types
+(`PerformanceInsight`, `Experiment`); `PublishState` and `PostMetrics` are deprecated Phase 1
+placeholders kept because stored checkpoints contain them.
 
 ## 4. Agents and their contracts
 
@@ -214,8 +217,8 @@ ResearchFinding.id  <-  ContentCandidate.research_finding_ids ; ContentOpportuni
 ContentStrategy.id/version  <-  ContentCandidate.strategy_id/strategy_version
 ContentCandidate.id  <-  ContentCandidate.revises_candidate_id (model retry or human edit)
 ContentCandidate.id  <-  Critique.candidate_id  <-  ReviewDecision.candidate_id
-ContentCandidate.id  <-  PublishedPost.candidate_id             (Phase 5)
-PublishedPost.platform_post_id  <-  PostMetrics                 (Phase 6)
+ContentCandidate.id  <-  publications.candidate_id               (Phase 5)
+publications.id  <-  analytics_jobs.publication_id  <-  post_metrics.job_id   (Phase 6)
 ```
 
 ## 8. Provider boundary
@@ -420,6 +423,34 @@ started/finished row per provider-calling node attempt, written by `instrument()
 `OperationLedger` port. An unfinished row means an external operation whose process died; no
 usage, tokens or cost are ever invented for it.
 
+## 8d. Analytics collection (Phase 6)
+
+Full detail in [ANALYTICS.md](ANALYTICS.md). Like publishing, metrics collection is a service
+workflow over durable rows, not a graph node:
+
+```
+publish / resolve-as-published (same transaction)  or  explicit backfill
+        |  analytics_jobs: one row per (publication, age), scheduled_for = basis + age
+AnalyticsWorker (sga-analytics-worker)
+   sweep expired leases -> claim due jobs (FOR UPDATE SKIP LOCKED + lease)
+   commit jobs=collecting + analytics_requests(started) + analytics_attempts(started)
+   SocialAnalyticsProvider.fetch_post_metrics(ids)   <- the only external call (one per batch)
+   commit request finished; post_metrics rows; retry policy for the rest
+```
+
+- **Provider:** `XAnalyticsProvider` reads `public_metrics` and `created_at` with the app-only
+  bearer token via `GET /2/tweets?ids=`. The protocol carries `metrics_scope`, so a user-context
+  provider for private metrics can be added later without schema changes; it is not built.
+- **Policy:** `policies/analytics.py` classifies failures and computes `retry_not_before` with the
+  deterministic backoff in `policies/retry.py` (shared with Phase 5 `not_sent` retries).
+- **Persistence:** jobs and snapshots are unique per (publication, age) in the database; the
+  request/attempt ledgers make every read visible, including one whose process died.
+- **Timing:** `published_at` (recorded) and `provider_created_at` (X) are distinct; the first
+  creation time reconciles waiting jobs onto it, and every snapshot exposes its capture delay,
+  actual age and whether it is on target.
+- **Derived metrics** (`analytics/derived.py`) are observational and NULL-propagating.
+- **No backfill on startup:** the worker never creates jobs, and migration 0004 creates none.
+
 ## 9. Layering
 
 ```
@@ -428,6 +459,7 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
           |    \          \-> policies
           |     \-> persistence (tables, recorder, ledgers, publications, checkpointer)  accounting (prices, estimates)
           \-> publisher worker -> providers (SocialPublisher) + policies (publish rules)
+          \-> analytics worker -> providers (SocialAnalyticsProvider) + policies (retry) + analytics (derived)
                      models  <- everything      config -> services.factory, providers.factory
 ```
 
@@ -445,6 +477,6 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
 
 See [ROADMAP.md](ROADMAP.md). Next structural additions:
 
-- `wait_for_metrics → analyze → update_strategy` after a published post, joined to the
-  Phase 5 `publications` rows by `provider_post_id`;
-- metric snapshot tables joined to the existing candidate → critique → finding → post chain.
+- Phase 7: an analysis step over `post_metrics` joined through `publication_lineage` to the
+  candidate, critique, findings and strategy version, proposing (not applying) a new strategy
+  version for human approval.

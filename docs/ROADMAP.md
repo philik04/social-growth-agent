@@ -61,10 +61,25 @@ Not done in Phase 5 (deliberate): no timeline reconciliation of `unknown` public
 (resolving is manual), no threads or media, no multi-account publishing (no OAuth 2.0 PKCE
 token store), no analytics.
 
-## Phase 6: Analytics collection
-- `SocialAnalyticsProvider` for X; scheduled metric snapshots (e.g. 1h, 24h, 72h).
-- Metrics stored per post with lineage to candidate, critique and strategy.
-- **Exit:** every published post has metric snapshots joined to its full trace.
+## Phase 6: Analytics collection (done)
+- `SocialAnalyticsProvider` with `XAnalyticsProvider` (`GET /2/tweets?ids=`, `public_metrics`
+  and `created_at`, app-only bearer token) and a scripted mock.
+- `analytics_jobs` (one per publication and age, default 1h/24h/72h) created in the same
+  transaction that records a post as published, or by an explicit idempotent backfill; never
+  by the worker or a migration.
+- `sga-analytics-worker`: `FOR UPDATE SKIP LOCKED` claims with leases, started/finished request
+  and attempt ledgers committed around each call, a deterministic bounded backoff persisted in
+  `retry_not_before`, a deleted post cancelling its later jobs.
+- `post_metrics`: immutable snapshots, NULL when X did not return a count; recorded vs
+  creation time kept apart, with capture delay, actual age and an on-target flag per snapshot.
+- API: metrics, lineage, `/posts`, jobs, retry and backfill; analytics usage and cost lines.
+- The Phase 5 `not_sent` retry now waits for a backoff.
+- **Exit:** met for collection: every published post gets scheduled snapshots joined to its full
+  trace. Still open: a live read with our own token to confirm which public metrics we receive,
+  and real prices in `pricing.toml`.
+
+Not done in Phase 6 (deliberate): private metrics (user-context auth), media view counts,
+interpretation of the numbers, any automatic strategy change.
 
 ## Phase 7: Strategy-learning feedback loop
 - Analytics Agent derives `PerformanceInsight`s (hook type, topic, format, length, posting window).

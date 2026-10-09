@@ -1,6 +1,5 @@
 """Deterministic in-memory social platform mocks."""
 
-import hashlib
 import re
 import threading
 from collections.abc import Callable, Iterable, Sequence
@@ -11,7 +10,6 @@ from social_growth_agent.errors import (
 )
 from social_growth_agent.models import (
     FetchOutcome,
-    PostMetrics,
     PublishFailureCategory,
     PublishRequest,
     PublishResult,
@@ -133,26 +131,3 @@ class MockPublisher:
             )
             self.published.append(result)
         return result
-
-
-class MockAnalyticsProvider:
-    """Derives stable pseudo-metrics from a hash of the post id."""
-
-    def fetch_metrics(self, platform_post_ids: list[str]) -> list[PostMetrics]:
-        return [self._metrics_for(post_id) for post_id in platform_post_ids]
-
-    @staticmethod
-    def _metrics_for(post_id: str) -> PostMetrics:
-        seed = int.from_bytes(hashlib.sha256(post_id.encode()).digest()[:8], "big")
-        impressions = 1_000 + seed % 20_000
-        return PostMetrics(
-            platform_post_id=post_id,
-            impressions=impressions,
-            likes=impressions // 40,
-            replies=impressions // 400,
-            reposts=impressions // 250,
-            bookmarks=impressions // 300,
-            profile_visits=impressions // 120,
-            link_clicks=None,
-            follower_change=seed % 7,
-        )

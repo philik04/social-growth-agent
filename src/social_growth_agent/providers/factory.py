@@ -3,7 +3,11 @@ if 'openai' or 'x' is configured and cannot be built, startup fails."""
 
 from social_growth_agent.config import AppSettings
 from social_growth_agent.providers.llm import LLMProvider
-from social_growth_agent.providers.social import SocialPublisher, SocialResearchProvider
+from social_growth_agent.providers.social import (
+    SocialAnalyticsProvider,
+    SocialPublisher,
+    SocialResearchProvider,
+)
 
 
 def build_llm_provider(settings: AppSettings) -> LLMProvider:
@@ -43,3 +47,17 @@ def build_publisher(settings: AppSettings) -> SocialPublisher:
     from social_growth_agent.providers.x import XPublisher
 
     return XPublisher.from_settings(settings)
+
+
+def build_analytics_provider(settings: AppSettings) -> SocialAnalyticsProvider:
+    """'x' reads public metrics with the app-only X_BEARER_TOKEN (the least-privileged
+    credential that returns them). The publishing keys are never used for analytics."""
+    if settings.analytics_provider == "mock":
+        from social_growth_agent.providers.mocks import MockAnalyticsProvider
+
+        return MockAnalyticsProvider()
+    from social_growth_agent.providers.x import XAnalyticsProvider
+
+    return XAnalyticsProvider.from_token(
+        settings.x_bearer_token, timeout_seconds=settings.x_timeout_seconds
+    )

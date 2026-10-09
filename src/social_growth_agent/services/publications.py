@@ -6,6 +6,7 @@ worker may make an external call. Endpoints translate HTTP to these calls and no
 """
 
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,9 @@ from social_growth_agent.policies import (
     schedule_refusal,
 )
 
+if TYPE_CHECKING:
+    from social_growth_agent.services.analytics import AnalyticsSchedule
+
 _log = get_logger("publications")
 
 DEFAULT_PLATFORM = "x"
@@ -59,10 +63,12 @@ class PublicationService:
         *,
         platform: str = DEFAULT_PLATFORM,
         window: ScheduleWindow | None = None,
+        analytics: "AnalyticsSchedule | None" = None,
     ) -> None:
         self._db = db
         self._platform = platform
         self._window = window or ScheduleWindow()
+        self._analytics = analytics
 
     # --- commands -------------------------------------------------------------------
 
@@ -206,6 +212,11 @@ class PublicationService:
                     resolved_by=resolved_by,
                     resolution_note=note,
                 )
+                if self._analytics is not None:
+                    # Scheduled from the *recorded* (resolution) time until the platform
+                    # reports the real creation time; the first metrics read then
+                    # reconciles the jobs still waiting (see persistence/analytics.py).
+                    self._analytics.enqueue_on_publish_in(session, publication_id)
             else:
                 self._recheck(session, row)
                 pubs.set_outcome(session, publication_id, status=PublicationStatus.READY)

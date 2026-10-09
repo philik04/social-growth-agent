@@ -151,7 +151,7 @@ in-flight call is never swept.
 | 429 with a reset time, attempts left | `rate_limited` (+ reset time) | `ready` with `retry_not_before` = reset | yes, after the reset, up to `PUBLISH_MAX_ATTEMPTS`; nothing sleeps | not needed (it is not `failed`) |
 | 429 with a reset time, attempts used up | `rate_limited` (+ reset time) | `failed` | no | yes, once the reset has passed |
 | 429 without a reset time | `rate_limited` | `failed` | no | yes |
-| connection failed before sending | `not_sent` | `ready` | yes, up to `PUBLISH_MAX_ATTEMPTS` | yes |
+| connection failed before sending | `not_sent` | `ready` with `retry_not_before` = now + backoff | yes, after the backoff (Phase 6), up to `PUBLISH_MAX_ATTEMPTS` | yes |
 | read/write timeout after sending | `timeout` | `unknown` | **never** | no; resolve only |
 | 5xx | `server_error` | `unknown` | **never** | no; resolve only |
 | 2xx without a post id, or a non-JSON body | `malformed_response` | `unknown` | **never** | no; resolve only |
@@ -167,6 +167,12 @@ reset has passed. `retry_not_before` is cleared on the next attempt and by every
 outcome. A 429 without a usable reset header stays `failed` for a manual retry, because
 there is no safe time to retry it at. `auth` stays manual-only and `unknown` is never
 retried automatically.
+
+Since Phase 6 a `not_sent` failure also waits before its next attempt instead of being
+retried on the very next cycle: `retry_not_before = now + min(base * 2^(attempt-1), max)`
+(`PUBLISH_BACKOFF_BASE_SECONDS=30`, `PUBLISH_BACKOFF_MAX_SECONDS=600`). Nothing else in the
+classification changed, and a worker built without a backoff (the Phase 5 tests) keeps the
+old immediate behaviour.
 
 ## Scheduling and the worker
 
@@ -218,6 +224,8 @@ X_PUBLISH_TIMEOUT_SECONDS=10
 PUBLISHER_POLL_SECONDS=5
 PUBLISHER_LEASE_SECONDS=60             # at least 2 x the publish timeout + 5
 PUBLISH_MAX_ATTEMPTS=3                 # bounds not-sent retries and post-reset 429 retries
+PUBLISH_BACKOFF_BASE_SECONDS=30        # not-sent retries wait base * 2^(attempt-1) ...
+PUBLISH_BACKOFF_MAX_SECONDS=600        # ... at most this long (Phase 6)
 PUBLISHER_EMBEDDED_WORKER=false        # local development only
 PUBLISH_MAX_SCHEDULE_DAYS=30
 PUBLISH_PAST_TOLERANCE_SECONDS=300
@@ -270,6 +278,21 @@ uv run sga-publisher-worker --once                                 # the only ca
 curl -s localhost:8000/publications/$PUB                           # published + post url
 ```
 
+## After publishing: timestamps, analytics and cost
+
+- `published_at` is when **this application recorded** the publication: the worker's
+  commit after X answered, or the moment a human resolved an `unknown` publication as
+  published. For a resolved post it can be minutes or days after the post really
+  appeared. X's own creation time is stored separately as `provider_created_at`, the
+  first time an analytics read returns it (`created_at` on `GET /2/tweets`); it is never
+  inferred from `published_at`, and the resolve time is never presented as the post time.
+- Recording a publication as published (worker or resolve) creates its analytics jobs in
+  the same transaction (`ANALYTICS_ENQUEUE_ON_PUBLISH=true`). Publications from before
+  Phase 6 get jobs only through an explicit backfill. See [ANALYTICS.md](ANALYTICS.md).
+- X bills post creation (per request, with a higher rate for posts containing a URL, per
+  X's pricing page). Prices are configuration: `x.post_create` in `pricing.toml` is blank
+  by default, so publish lines appear under `missing_prices` rather than as free.
+
 ## Live publishing safety
 
 Publishing for real is triple gated and never happens by accident:
@@ -293,7 +316,7 @@ afterwards, and nothing posts merely because credentials are configured.
 
 ## Deliberately not here
 
-- No analytics or metrics collection (Phase 6).
+- No analytics here: metrics collection is a separate worker (Phase 6, [ANALYTICS.md](ANALYTICS.md)).
 - No timeline reconciliation of `unknown` publications; resolving is manual.
 - No threads, media, replies or quote posts: `POST /2/tweets` is called with `{"text":
   ...}` and nothing else.

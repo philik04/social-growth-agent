@@ -78,10 +78,60 @@ class AppSettings(BaseSettings):
         description="Run a publisher worker thread inside the API process (local "
         "development only). The standalone sga-publisher-worker is the canonical worker.",
     )
+    publish_backoff_base_seconds: int = Field(
+        default=30,
+        ge=1,
+        le=3600,
+        description="Wait before retrying a publish that provably never reached the "
+        "platform (doubles per attempt, capped). Persisted as retry_not_before.",
+    )
+    publish_backoff_max_seconds: int = Field(default=600, ge=1, le=86_400)
     publish_max_schedule_days: int = Field(default=30, ge=1, le=365)
     publish_past_tolerance_seconds: int = Field(
         default=300, ge=0, le=3600, description="A slightly past scheduled_for means 'now'."
     )
+
+    # --- analytics (Phase 6) ----------------------------------------------------------
+    # Public metrics only, read with the app-only X_BEARER_TOKEN (never the publish keys).
+    analytics_provider: Literal["mock", "x"] = Field(
+        default="mock",
+        description="'mock' returns synthetic metrics; 'x' reads GET /2/tweets with the "
+        "app-only bearer token. Never a silent fallback.",
+    )
+    analytics_snapshot_ages: str = Field(
+        default="1h,24h,72h",
+        description="Comma-separated ages after publication, e.g. '1h,24h,72h' (s/m/h/d).",
+    )
+    analytics_enqueue_on_publish: bool = Field(
+        default=True,
+        description="Create the snapshot jobs when a publication is recorded as published. "
+        "Older publications are only scheduled by an explicit backfill.",
+    )
+    analytics_poll_seconds: float = Field(default=30.0, gt=0, le=3600)
+    analytics_lease_seconds: int = Field(default=60, ge=10, le=3600)
+    analytics_max_attempts: int = Field(default=5, ge=1, le=20)
+    analytics_batch_size: int = Field(
+        default=50, ge=1, le=100, description="Due jobs per cycle; X allows 100 ids per call."
+    )
+    analytics_backoff_base_seconds: int = Field(default=60, ge=1, le=86_400)
+    analytics_backoff_max_seconds: int = Field(default=3600, ge=1, le=7 * 86_400)
+
+    @model_validator(mode="after")
+    def _analytics_settings_are_consistent(self) -> Self:
+        from social_growth_agent.policies.analytics import parse_snapshot_ages
+
+        parse_snapshot_ages(self.analytics_snapshot_ages)  # raises ValueError if invalid
+        if self.analytics_backoff_max_seconds < self.analytics_backoff_base_seconds:
+            raise ValueError(
+                "ANALYTICS_BACKOFF_MAX_SECONDS must be at least ANALYTICS_BACKOFF_BASE_SECONDS"
+            )
+        if self.publish_backoff_max_seconds < self.publish_backoff_base_seconds:
+            raise ValueError(
+                "PUBLISH_BACKOFF_MAX_SECONDS must be at least PUBLISH_BACKOFF_BASE_SECONDS"
+            )
+        if self.analytics_lease_seconds < 2 * self.x_timeout_seconds + 5:
+            raise ValueError("ANALYTICS_LEASE_SECONDS must be at least 2 x X_TIMEOUT_SECONDS + 5")
+        return self
 
     @model_validator(mode="after")
     def _lease_outlives_the_call(self) -> Self:

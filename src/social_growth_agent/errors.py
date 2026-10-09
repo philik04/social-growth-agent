@@ -17,6 +17,9 @@ The split matters for control flow:
   known about an external post-create call: definitely rejected, definitely not sent,
   or outcome unknown. The publisher worker turns them into publication states; none of
   them is retried by the graph (publishing does not run in the graph).
+- ``AnalyticsError`` (Phase 6) is raised by analytics providers for a whole failed
+  metrics request. Reads create nothing, so the analytics worker may retry them,
+  bounded and with a persisted backoff; nothing sleeps.
 
 Errors raised around an LLM call carry ``llm_call`` metadata, and errors raised during
 research carry ``research_fetch`` metadata, so the failure can be recorded in the run
@@ -25,6 +28,7 @@ trace. Messages never contain credentials or request headers.
 
 from datetime import datetime
 
+from social_growth_agent.models.analytics import AnalyticsFailureCategory
 from social_growth_agent.models.publishing import PublishFailureCategory
 from social_growth_agent.models.research import ResearchFetch
 from social_growth_agent.models.run import LLMCall, ProviderErrorCategory
@@ -187,3 +191,35 @@ class PublishNotSentError(PublishError):
 class PublishOutcomeUnknownError(PublishError):
     """The request may have reached the platform; whether a post exists is unknown.
     Never retried automatically."""
+
+
+# --- analytics (Phase 6) ----------------------------------------------------------------
+
+
+class AnalyticsError(ProviderError):
+    """A whole analytics request failed. Reads have no external side effect, so the
+    category alone decides whether the job is retried; messages are sanitized."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_category: AnalyticsFailureCategory,
+        http_status: int | None = None,
+        latency_ms: float = 0.0,
+        rate_limit_reset_at: datetime | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_category = failure_category
+        self.http_status = http_status
+        self.latency_ms = latency_ms
+        self.rate_limit_reset_at = rate_limit_reset_at
+
+
+class AnalyticsJobNotFoundError(ResourceNotFoundError):
+    pass
+
+
+class NotSchedulableError(InvalidRunStateError):
+    """Analytics cannot be scheduled for this publication (not published, no post id,
+    or no publication timestamp)."""

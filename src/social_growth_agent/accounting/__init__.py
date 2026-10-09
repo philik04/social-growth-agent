@@ -1,6 +1,7 @@
 """Usage counts and cost estimates. Counts are canonical; costs are always estimates."""
 
 from social_growth_agent.accounting.costs import (
+    AnalyticsUsage,
     CostEstimate,
     CostLine,
     LLMUsage,
@@ -11,6 +12,7 @@ from social_growth_agent.accounting.costs import (
 from social_growth_agent.accounting.pricing import ModelPrice, PriceList, load_price_list
 
 __all__ = [
+    "AnalyticsUsage",
     "CostEstimate",
     "CostLine",
     "LLMUsage",

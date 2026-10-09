@@ -29,9 +29,13 @@ def test_publisher_assigns_sequential_ids_and_enforces_length():
         publisher.publish(PublishRequest(account_id="a", candidate_id="c", content="x" * 281))
 
 
-def test_analytics_provider_is_stable_per_post_id():
-    analytics = MockAnalyticsProvider()
-    a1, b = analytics.fetch_metrics(["mock-x-0001", "mock-x-0002"])
-    [a2] = analytics.fetch_metrics(["mock-x-0001"])
-    assert a1.model_dump(exclude={"collected_at"}) == a2.model_dump(exclude={"collected_at"})
-    assert a1.impressions != b.impressions
+def test_analytics_mock_is_deterministic_and_reports_deleted_posts_as_misses():
+    analytics = MockAnalyticsProvider(deleted=["gone"])
+    first = analytics.fetch_post_metrics(["1001", "1002", "gone"])
+    again = MockAnalyticsProvider(deleted=["gone"]).fetch_post_metrics(["1001", "1002", "gone"])
+    assert first == again
+    a, b = first.records
+    assert a.impressions != b.impressions
+    assert [m.provider_post_id for m in first.misses] == ["gone"]
+    assert first.posts_returned == 2
+    assert a.provider_created_at is None  # unknown unless the platform reports it

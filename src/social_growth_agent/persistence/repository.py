@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from social_growth_agent.accounting import (
+    AnalyticsUsage,
     LLMUsage,
     PriceList,
     PublishUsage,
@@ -20,6 +21,7 @@ from social_growth_agent.accounting.costs import ResearchUsage
 from social_growth_agent.errors import RunNotFoundError
 from social_growth_agent.models import RunStatus
 from social_growth_agent.persistence import publications as pubs
+from social_growth_agent.persistence.analytics import analytics_operation_counts
 from social_growth_agent.persistence.tables import (
     CandidateFindingRow,
     ContentCandidateRow,
@@ -162,8 +164,8 @@ def run_detail(session: Session, run_id: str, prices: PriceList | None) -> RunDe
     return RunDetail(
         run=summary(row),
         research_fetches=_fetches(session, run_id),
-        source_posts=_posts(session, run_id),
-        research=_research(session, run_id),
+        source_posts=source_post_views(session, run_id),
+        research=research_view(session, run_id),
         candidates=candidate_views(session, run_id),
         review=_review(session, row),
         usage=usage,
@@ -225,7 +227,21 @@ def usage_counts(session: Session, run_id: str) -> UsageCounts:
         PublishUsage(provider=provider, attempts=attempts, posts_created=created)
         for provider, attempts, created in pubs.publish_operation_counts(session, run_id)
     ]
+    analytics = [
+        AnalyticsUsage(
+            provider=provider,
+            requests=requests,
+            post_reads=reads,
+            snapshots=snapshots,
+            failed_requests=failed,
+            unfinished_requests=unfinished,
+        )
+        for provider, requests, reads, snapshots, failed, unfinished in (
+            analytics_operation_counts(session, run_id)
+        )
+    ]
     return UsageCounts(
+        analytics=analytics,
         publishing=publishing,
         research=[
             ResearchUsage(provider=p, fetches=n, requests=req, post_reads=posts, user_reads=users)
@@ -314,7 +330,7 @@ def _fetches(session: Session, run_id: str) -> list[FetchView]:
     return [FetchView.model_validate(r, from_attributes=True) for r in rows]
 
 
-def _posts(session: Session, run_id: str) -> list[PostView]:
+def source_post_views(session: Session, run_id: str) -> list[PostView]:
     rows = session.scalars(
         select(SourcePostRow)
         .where(SourcePostRow.run_id == run_id)
@@ -337,7 +353,7 @@ def _posts(session: Session, run_id: str) -> list[PostView]:
     ]
 
 
-def _research(session: Session, run_id: str) -> ResearchView | None:
+def research_view(session: Session, run_id: str) -> ResearchView | None:
     brief = session.scalars(
         select(ResearchBriefRow).where(ResearchBriefRow.run_id == run_id)
     ).first()

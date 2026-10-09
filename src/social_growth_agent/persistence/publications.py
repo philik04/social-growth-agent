@@ -433,6 +433,9 @@ def find_for_target(
 
 
 def publication_view(session: Session, row: PublicationRow) -> PublicationView:
+    # Imported here: ``persistence.analytics`` builds on this module.
+    from social_growth_agent.persistence.analytics import analytics_summary
+
     attempts = session.scalars(
         select(PublicationAttemptRow)
         .where(PublicationAttemptRow.publication_id == row.id)
@@ -459,11 +462,13 @@ def publication_view(session: Session, row: PublicationRow) -> PublicationView:
         failure_message=row.failure_message,
         rate_limit_reset_at=row.rate_limit_reset_at,
         retry_not_before=row.retry_not_before,
+        provider_created_at=row.provider_created_at,
         resolved_by=row.resolved_by,
         resolution_note=row.resolution_note,
         created_at=row.created_at,
         updated_at=row.updated_at,
         attempts=[PublicationAttemptView.model_validate(a, from_attributes=True) for a in attempts],
+        analytics=analytics_summary(session, row.id),
     )
 
 

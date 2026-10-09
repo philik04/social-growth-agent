@@ -34,7 +34,7 @@ Checkpoints use the allowlisted serializer from Phase 1: only our own domain and
 can be deserialized. Domain rows are immutable records keyed by their ids and inserted with
 `ON CONFLICT DO NOTHING`, so the same state can be projected any number of times.
 
-## Schema (revision 0003)
+## Schema (revision 0004)
 
 All child tables reference `runs.id` with `ON DELETE CASCADE`.
 
@@ -54,21 +54,31 @@ All child tables reference `runs.id` with `ON DELETE CASCADE`.
 | `review_decisions` | `id`, `run_id`, `action`, `candidate_id`, `resulting_candidate_id` (edit), `edited_content`, `reviewed_candidate_ids`, `note`, `reviewer`, `decided_at` | `reviewed_candidate_ids` (0002) is the review request the decision answered; empty for decisions recorded before Phase 5 |
 | `run_events` | `id`, `run_id`, node, outcome, attempt, duration | One row per node execution |
 | `run_errors` | `id`, `run_id`, node, `error_type`, message | |
-| `publications` (0002) | `id`, `run_id` → `runs`, (`run_id`, `candidate_id`) → `content_candidates` (`run_id`, `id`), `platform`, `idempotency_key` UNIQUE, UNIQUE (`run_id`, `candidate_id`, `platform`), `content`, `content_sha256`, `status` (CHECK), `scheduled_for`, `requested_by`, `claimed_by`, `claimed_at`, `lease_expires_at`, `attempt_count`, `provider`, `provider_post_id`, `provider_post_url`, `started_at`, `published_at`, `failure_category`, `failure_message`, `rate_limit_reset_at`, `retry_not_before` (0003), `resolved_by`, `resolution_note` | One durable publication intent; status: `scheduled`, `ready`, `publishing`, `published`, `failed`, `unknown`, `cancelled`. **No** `ON DELETE CASCADE`: the record of an external side effect must not vanish with its run |
+| `publications` (0002) | `id`, `run_id` → `runs`, (`run_id`, `candidate_id`) → `content_candidates` (`run_id`, `id`), `platform`, `idempotency_key` UNIQUE, UNIQUE (`run_id`, `candidate_id`, `platform`), `content`, `content_sha256`, `status` (CHECK), `scheduled_for`, `requested_by`, `claimed_by`, `claimed_at`, `lease_expires_at`, `attempt_count`, `provider`, `provider_post_id`, `provider_post_url`, `started_at`, `published_at`, `provider_created_at` (0004), `failure_category`, `failure_message`, `rate_limit_reset_at`, `retry_not_before` (0003), `resolved_by`, `resolution_note` | One durable publication intent; status: `scheduled`, `ready`, `publishing`, `published`, `failed`, `unknown`, `cancelled`. **No** `ON DELETE CASCADE`: the record of an external side effect must not vanish with its run |
 | `publication_attempts` (0002) | `id`, `publication_id`, UNIQUE (`publication_id`, `attempt`), `worker_id`, `provider`, `started_at`, `finished_at`, `latency_ms`, `outcome`, `http_status`, `failure_category`, `failure_message` (sanitized), `rate_limit_reset_at`, `provider_post_id` | Started ledger: committed before the platform call. `outcome='started'` with no `finished_at` means the process died mid-call |
 | `provider_operations` (0002) | `id`, `run_id`, `node`, `provider`, `operation`, `generation_attempt`, `started_at`, `finished_at`, `outcome`, `error_type`, `latency_ms`, `usage_records` | Started ledger for every provider-calling node attempt; unfinished rows carry no invented usage |
+| `analytics_jobs` (0004) | `id`, `publication_id` → `publications`, UNIQUE (`publication_id`, `snapshot_age`), `age_seconds`, `schedule_basis` (`provider_created_at` \| `recorded_published_at`), `basis_at`, `scheduled_for`, `original_scheduled_for`, `origin` (`publish` \| `backfill`), `status` (CHECK), lease columns, `attempt_count`, `attempt_base`, `retry_not_before`, `failure_category`, `failure_message`, `rate_limit_reset_at`, `collected_at` | One planned snapshot; status: `scheduled`, `collecting`, `collected`, `failed`, `cancelled`. Index on (`status`, `scheduled_for`) for the claim query |
+| `analytics_requests` (0004) | `id`, `worker_id`, `provider`, `metrics_scope`, `post_ids` (JSON), `started_at`, `finished_at`, `outcome` (`started`, `succeeded`, `partial`, `failed`), `http_status`, `error_category`, `error_message`, `posts_returned`, rate-limit fields, `latency_ms` | Started ledger for every metrics read, committed before the call; may cover posts of several runs |
+| `analytics_attempts` (0004) | `id`, `request_id`, `job_id`, UNIQUE (`job_id`, `attempt`), `publication_id`, `provider_post_id`, `attempt`, `outcome` (`started`, `collected`, `not_found`, `failed`), `failure_category`, `started_at`, `finished_at` | One job's part in one request |
+| `post_metrics` (0004) | `id`, `job_id` UNIQUE, UNIQUE (`publication_id`, `snapshot_age`), `request_id`, `platform`, `provider`, `metrics_scope`, `provider_post_id`, `snapshot_age`, `target_age_seconds`, `scheduled_for`, `captured_at`, `provider_created_at`, `recorded_published_at`, `likes`, `reposts`, `replies`, `quotes`, `bookmarks`, `impressions` | Immutable observations. A count is NULL when the platform did not return it, 0 only when it returned 0. No raw provider JSON |
 
 The provenance chain is a plain join:
 `content_candidates → critiques`, `content_candidates → candidate_findings → research_findings
 → finding_evidence → source_posts`, `review_decisions → content_candidates`, and
 `publications → content_candidates` (through a composite FK, so a publication's candidate
-always belongs to its run).
+always belongs to its run), and `post_metrics → analytics_jobs → publications`.
+`GET /publications/{id}/lineage` assembles the whole chain (see [ANALYTICS.md](ANALYTICS.md)).
+The analytics tables reference `publications` without `ON DELETE CASCADE`, like
+`publication_attempts`.
 
 Migrations: `0001` is never modified. `0002` adds the three publishing tables, the decision
 snapshot column and `UNIQUE (content_candidates.run_id, id)`. `0003` adds
 `publications.retry_not_before`, the gate a rate-limited row waits behind until its reset
-(NULL for existing rows). Both apply to an existing Phase 4
-database and to a fresh one (`sga-db upgrade`). A DB test upgrades a populated `0001` database
+(NULL for existing rows). `0004` adds the four analytics tables and
+`publications.provider_created_at` (NULL for existing rows); it creates **no** jobs, so
+upgrading never schedules reads: older publications get jobs only through an explicit
+`POST /publications/{id}/analytics/backfill` or `sga-analytics-worker backfill`. All apply to
+an existing database and to a fresh one (`sga-db upgrade`). A DB test upgrades a populated `0001` database
 and checks the existing rows survive, and another compares the migrated schema against the
 SQLAlchemy models.
 

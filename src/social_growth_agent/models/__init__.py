@@ -1,6 +1,18 @@
 """Domain models. Import from here rather than from submodules."""
 
 from social_growth_agent.models.account import Account, ContentStrategy
+from social_growth_agent.models.analytics import (
+    AnalyticsFailureCategory,
+    AnalyticsFetch,
+    AnalyticsJobStatus,
+    AttemptResult,
+    MetricsScope,
+    PostMetricMiss,
+    PostMetricRecord,
+    RequestOutcome,
+    ScheduleBasis,
+    SnapshotAge,
+)
 from social_growth_agent.models.base import DomainModel, new_id, utc_now
 from social_growth_agent.models.content import (
     CandidateOrigin,
@@ -66,7 +78,11 @@ from social_growth_agent.models.run import (
 __all__ = [
     "ACTIVE_PUBLICATION_STATUSES",
     "Account",
+    "AnalyticsFailureCategory",
+    "AnalyticsFetch",
+    "AnalyticsJobStatus",
     "AttemptOutcome",
+    "AttemptResult",
     "CandidateOrigin",
     "ClaimType",
     "Confidence",
@@ -86,10 +102,13 @@ __all__ = [
     "IssueCategory",
     "LLMCall",
     "LLMCallOutcome",
+    "MetricsScope",
     "NodeEvent",
     "PerformanceInsight",
     "PolicyViolation",
     "PostFormat",
+    "PostMetricMiss",
+    "PostMetricRecord",
     "PostMetrics",
     "ProviderErrorCategory",
     "PublicationStatus",
@@ -99,6 +118,7 @@ __all__ = [
     "PublishState",
     "PublishStatus",
     "PublishedPost",
+    "RequestOutcome",
     "ResearchBrief",
     "ResearchFetch",
     "ResearchFinding",
@@ -112,8 +132,10 @@ __all__ = [
     "RiskLevel",
     "RunError",
     "RunStatus",
+    "ScheduleBasis",
     "SearchResult",
     "SignalDecision",
+    "SnapshotAge",
     "SourcePost",
     "TokenUsage",
     "ToneMatch",

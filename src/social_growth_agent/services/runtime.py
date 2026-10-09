@@ -20,8 +20,12 @@ from social_growth_agent.graph import DEFAULT_RETRY_POLICY, Dependencies
 from social_growth_agent.persistence import Database, OperationRecorder, UsageLedger
 from social_growth_agent.persistence.checkpointer import open_pool, postgres_checkpointer
 from social_growth_agent.policies import ScheduleWindow
-from social_growth_agent.providers import SocialPublisher
-from social_growth_agent.providers.factory import build_publisher
+from social_growth_agent.policies.analytics import parse_snapshot_ages
+from social_growth_agent.policies.retry import Backoff
+from social_growth_agent.providers import SocialAnalyticsProvider, SocialPublisher
+from social_growth_agent.providers.factory import build_analytics_provider, build_publisher
+from social_growth_agent.services.analytics import AnalyticsSchedule, AnalyticsService
+from social_growth_agent.services.analytics_worker import AnalyticsWorker
 from social_growth_agent.services.factory import build_dependencies
 from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.publisher import EmbeddedWorker, PublisherWorker
@@ -33,6 +37,7 @@ from social_growth_agent.services.workflow import WorkflowService
 class Runtime:
     service: RunService
     publications: PublicationService
+    analytics: AnalyticsService
     db: Database
     pool: ConnectionPool[Connection[DictRow]]
     executor: Executor
@@ -86,7 +91,9 @@ def build_runtime(
         max_ahead=timedelta(days=settings.publish_max_schedule_days),
         past_tolerance=timedelta(seconds=settings.publish_past_tolerance_seconds),
     )
-    publications = PublicationService(db, window=window)
+    schedule = analytics_schedule(settings)
+    publications = PublicationService(db, window=window, analytics=schedule)
+    analytics = AnalyticsService(db, schedule=schedule)
     worker = build_publisher_worker(settings, db, publisher=publisher)
     embedded = (
         EmbeddedWorker(worker, poll_seconds=settings.publisher_poll_seconds)
@@ -96,6 +103,7 @@ def build_runtime(
     return Runtime(
         service=service,
         publications=publications,
+        analytics=analytics,
         db=db,
         pool=pool,
         executor=executor,
@@ -114,4 +122,35 @@ def build_publisher_worker(
         publisher=publisher or build_publisher(settings),
         lease_seconds=settings.publisher_lease_seconds,
         max_attempts=settings.publish_max_attempts,
+        analytics=analytics_schedule(settings),
+        backoff=Backoff(
+            base_seconds=settings.publish_backoff_base_seconds,
+            max_seconds=settings.publish_backoff_max_seconds,
+        ),
+    )
+
+
+def analytics_schedule(settings: AppSettings) -> AnalyticsSchedule:
+    return AnalyticsSchedule(
+        ages=parse_snapshot_ages(settings.analytics_snapshot_ages),
+        enqueue_on_publish=settings.analytics_enqueue_on_publish,
+    )
+
+
+def build_analytics_worker(
+    settings: AppSettings, db: Database, *, provider: SocialAnalyticsProvider | None = None
+) -> AnalyticsWorker:
+    """Builds the worker (and, for ``ANALYTICS_PROVIDER=x``, its bearer-token client).
+    Building it reads nothing: only ``run_once``/``run_forever`` call the platform, and
+    only for jobs that already exist."""
+    return AnalyticsWorker(
+        db=db,
+        provider=provider or build_analytics_provider(settings),
+        lease_seconds=settings.analytics_lease_seconds,
+        max_attempts=settings.analytics_max_attempts,
+        batch_size=settings.analytics_batch_size,
+        backoff=Backoff(
+            base_seconds=settings.analytics_backoff_base_seconds,
+            max_seconds=settings.analytics_backoff_max_seconds,
+        ),
     )

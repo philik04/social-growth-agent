@@ -122,7 +122,9 @@ class PublishState(DomainModel):
 
 
 class PostMetrics(DomainModel):
-    """A metrics snapshot. Optional fields are not always exposed by the X API tier."""
+    """Phase 1 placeholder, deprecated and never written. Kept only because
+    ``GraphState.metrics`` (and so every stored checkpoint) refers to it. Real metric
+    snapshots are ``post_metrics`` rows (Phase 6, ``models/analytics.py``)."""
 
     platform_post_id: str
     collected_at: datetime = Field(default_factory=utc_now)

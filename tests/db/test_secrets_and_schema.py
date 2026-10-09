@@ -18,6 +18,7 @@ from social_growth_agent.persistence.checkpointer import CHECKPOINT_TABLES
 from social_growth_agent.persistence.db import sqlalchemy_url
 from social_growth_agent.persistence.migrate import alembic_config, current_revision, upgrade
 from social_growth_agent.persistence.tables import APP_TABLES, Base
+from social_growth_agent.services.analytics import AnalyticsService
 from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.runs import InlineExecutor, RunService
 from social_growth_agent.services.runtime import Runtime
@@ -98,6 +99,7 @@ def test_unreachable_database_returns_503_without_leaking_the_url(run_payload):
     runtime = Runtime(
         service=service,
         publications=PublicationService(db),
+        analytics=AnalyticsService(db),
         db=db,
         pool=_NoPool(),
         executor=InlineExecutor(),
@@ -154,7 +156,7 @@ def test_fresh_database_migrates_to_head_with_checkpoint_tables(base_database_ur
     try:
         upgrade(url)
         upgrade(url)  # idempotent
-        assert current_revision(url) == "0003"
+        assert current_revision(url) == "0004"
         tables = {
             name
             for (name,) in sql(url, "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
@@ -176,7 +178,7 @@ def test_fresh_database_migrates_to_head_with_checkpoint_tables(base_database_ur
         }
         assert not set(APP_TABLES) & remaining
         upgrade(url)
-        assert current_revision(url) == "0003"
+        assert current_revision(url) == "0004"
     finally:
         drop_scratch_database(base_database_url, url)
 

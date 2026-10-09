@@ -1,9 +1,11 @@
 """Social platform ports. Business logic depends on these, never on the X API directly."""
 
+from collections.abc import Sequence
 from typing import Protocol
 
 from social_growth_agent.models import (
-    PostMetrics,
+    AnalyticsFetch,
+    MetricsScope,
     PublishRequest,
     PublishResult,
     ResearchQuery,
@@ -50,4 +52,25 @@ class SocialPublisher(Protocol):
 
 
 class SocialAnalyticsProvider(Protocol):
-    def fetch_metrics(self, platform_post_ids: list[str]) -> list[PostMetrics]: ...
+    """Reads metrics of published posts by platform post id. External I/O only: no
+    scheduling, no persistence, no retries, no interpretation.
+
+    Returns one ``AnalyticsFetch`` per call: a ``PostMetricRecord`` for every post the
+    platform returned and a ``PostMetricMiss`` for every id it answered without metrics
+    (deleted, protected). Raises ``AnalyticsError`` when the whole request failed.
+    Missing metric fields are ``None``, never 0. Errors never contain credentials, auth
+    headers or raw provider responses.
+
+    Phase 6 implementations read public metrics only (``metrics_scope == "public"``).
+    A provider for private, user-context metrics would declare another scope; the
+    snapshot rows record which scope produced them.
+    """
+
+    platform: str
+    provider_name: str
+    """Recorded on every request and snapshot, e.g. ``"x"`` or ``"mock_analytics"``."""
+    metrics_scope: MetricsScope
+    max_batch_size: int
+    """Most post ids one request may carry."""
+
+    def fetch_post_metrics(self, post_ids: Sequence[str]) -> AnalyticsFetch: ...

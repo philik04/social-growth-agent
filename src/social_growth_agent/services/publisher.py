@@ -16,7 +16,11 @@ Between (b) and (d) the publication is visible as ``publishing`` with an unfinis
 attempt. If this process dies there, no one knows whether the post exists, so the row
 becomes ``unknown`` and is never retried automatically. Only a failure proven to have
 happened before the request was sent returns to ``ready``, bounded by
-``PUBLISH_MAX_ATTEMPTS``.
+``PUBLISH_MAX_ATTEMPTS`` and (since Phase 6) not claimable before a deterministic
+backoff has passed (``retry_not_before``; nothing sleeps).
+
+When analytics scheduling is configured, the transaction that records a post as
+published also creates its snapshot jobs (Phase 6); no platform call is involved.
 """
 
 import os
@@ -27,6 +31,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from types import FrameType
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -52,7 +57,11 @@ from social_growth_agent.persistence import publications as pubs
 from social_growth_agent.persistence import repository as repo
 from social_growth_agent.persistence.tables import ContentCandidateRow, PublicationRow
 from social_growth_agent.policies import content_sha256, publish_refusals
+from social_growth_agent.policies.retry import Backoff
 from social_growth_agent.providers import SocialPublisher
+
+if TYPE_CHECKING:
+    from social_growth_agent.services.analytics import AnalyticsSchedule
 
 _log = get_logger("publisher")
 
@@ -89,8 +98,12 @@ class PublisherWorker:
         max_attempts: int = 3,
         batch_size: int = 5,
         name: str | None = None,
+        analytics: "AnalyticsSchedule | None" = None,
+        backoff: Backoff | None = None,
     ) -> None:
         self._db = db
+        self._analytics = analytics
+        self._backoff = backoff
         self._publisher = publisher
         self._lease_seconds = lease_seconds
         self._max_attempts = max_attempts
@@ -181,6 +194,9 @@ class PublisherWorker:
                 provider_post_id=result.provider_post_id,
                 provider_post_url=result.provider_post_url,
             )
+            if self._analytics is not None:
+                # Same transaction: a published post always has its snapshot jobs.
+                self._analytics.enqueue_on_publish_in(session, publication_id)
         _log.info(
             "published",
             extra={"publication_id": publication_id, "post_id": result.provider_post_id},
@@ -252,6 +268,9 @@ class PublisherWorker:
         retry_not_before = None
         if isinstance(exc, PublishNotSentError):
             outcome, bucket = AttemptOutcome.NOT_SENT, "requeued"
+            # Nothing reached the platform: retry, but not on the very next poll.
+            if self._backoff is not None:
+                retry_not_before = self._backoff.not_before(attempt, utc_now())
         elif isinstance(exc, PublishRejectedError):
             outcome, bucket = AttemptOutcome.REJECTED, "failed"
             # A rate limit with a known reset is the one rejection retried on its own:

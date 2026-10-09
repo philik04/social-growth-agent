@@ -27,12 +27,16 @@ class ModelPrice(BaseModel):
 class XPrices(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    post_read: Decimal | None = Field(default=None, ge=0, description="Per post read.")
+    post_read: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description="Per post read: research search results and analytics metric reads.",
+    )
     post_create: Decimal | None = Field(
         default=None,
         ge=0,
-        description="Per post created (publishing). Left unset where posting is not "
-        "billed per call; publish operations are then only counted.",
+        description="Per post created (publishing). X bills post creation; while this is "
+        "unset, publish lines are reported as missing prices, never as free.",
     )
     user_read: Decimal | None = Field(default=None, ge=0, description="Per user object read.")
 

@@ -9,13 +9,19 @@ durable publication intent (202); the publisher worker makes the platform call. 
 ``PUBLISHER_EMBEDDED_WORKER=true`` that worker runs on a thread in this process, which
 is a local-development convenience; the standalone ``sga-publisher-worker`` is the
 canonical publishing process.
+
+Analytics (Phase 6) is read-only from here: endpoints list snapshots, posts, jobs and
+lineage, and create jobs only on an explicit backfill. No endpoint calls the platform,
+and startup never schedules or collects anything; ``sga-analytics-worker`` does the
+reads.
 """
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 
 from social_growth_agent import __version__
 from social_growth_agent.api.errors import PersistenceNotConfiguredError, install_error_handlers
@@ -28,14 +34,19 @@ from social_growth_agent.api.schemas import (
     ReviewRequestBody,
 )
 from social_growth_agent.config import AppSettings
-from social_growth_agent.models import PublicationStatus, RunStatus
+from social_growth_agent.models import AnalyticsJobStatus, PublicationStatus, RunStatus
 from social_growth_agent.persistence.views import (
+    AnalyticsJobView,
+    LineageView,
+    MetricSnapshotView,
     PendingReview,
     PublicationView,
+    PublishedPostView,
     RunDetail,
     RunSummary,
     UsageReport,
 )
+from social_growth_agent.services.analytics import AnalyticsService, BackfillResult
 from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.runs import RunService
 from social_growth_agent.services.runtime import Runtime, build_runtime
@@ -55,7 +66,21 @@ def _publication_service(request: Request) -> PublicationService:
     return current.publications
 
 
+def _analytics_service(request: Request) -> AnalyticsService:
+    current: Runtime | None = getattr(request.app.state, "runtime", None)
+    if current is None:
+        raise PersistenceNotConfiguredError("persistence is not configured (DATABASE_URL)")
+    return current.analytics
+
+
+def _aware(name: str, value: datetime | None) -> datetime | None:
+    if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+        raise HTTPException(status_code=422, detail=f"{name} must include a timezone")
+    return value
+
+
 RunServiceDep = Annotated[RunService, Depends(_run_service)]
+AnalyticsServiceDep = Annotated[AnalyticsService, Depends(_analytics_service)]
 PublicationServiceDep = Annotated[PublicationService, Depends(_publication_service)]
 
 
@@ -176,6 +201,73 @@ def create_app(settings: AppSettings | None = None, runtime: Runtime | None = No
         publication_id: str, body: ActorBody, publications: PublicationServiceDep
     ) -> PublicationView:
         return publications.cancel(publication_id, cancelled_by=body.reviewer)
+
+    # --- analytics (Phase 6) ------------------------------------------------------
+
+    @app.get("/publications/{publication_id}/metrics")
+    def publication_metrics(
+        publication_id: str, analytics: AnalyticsServiceDep
+    ) -> list[MetricSnapshotView]:
+        """Snapshots ordered by target age. Counts are as reported (null = not
+        reported); ``on_target`` and ``capture_delay_seconds`` show when each was
+        really taken. Observational: no snapshot explains *why* a post performed."""
+        return analytics.metrics(publication_id)
+
+    @app.get("/publications/{publication_id}/lineage")
+    def publication_lineage(publication_id: str, analytics: AnalyticsServiceDep) -> LineageView:
+        """Publication -> candidate -> critiques -> findings -> source posts -> strategy."""
+        return analytics.lineage(publication_id)
+
+    @app.post(
+        "/publications/{publication_id}/analytics/backfill",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def backfill_analytics(
+        publication_id: str,
+        analytics: AnalyticsServiceDep,
+        dry_run: Annotated[bool, Query()] = False,
+    ) -> BackfillResult:
+        """Create the configured snapshot jobs this published post is missing.
+        Idempotent; reads nothing from the platform. 409 if it is not published."""
+        return analytics.backfill(publication_id, dry_run=dry_run)
+
+    @app.get("/posts")
+    def list_posts(
+        analytics: AnalyticsServiceDep,
+        since: Annotated[datetime | None, Query()] = None,
+        until: Annotated[datetime | None, Query()] = None,
+        account_id: Annotated[str | None, Query(max_length=64)] = None,
+        job_status: Annotated[AnalyticsJobStatus | None, Query(alias="status")] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> list[PublishedPostView]:
+        """Published posts (newest first) with their latest snapshot. ``status``
+        keeps posts that have an analytics job in that state."""
+        return analytics.posts(
+            since=_aware("since", since),
+            until=_aware("until", until),
+            account_id=account_id,
+            job_status=job_status,
+            limit=limit,
+        )
+
+    @app.get("/analytics/jobs")
+    def list_analytics_jobs(
+        analytics: AnalyticsServiceDep,
+        job_status: Annotated[AnalyticsJobStatus | None, Query(alias="status")] = None,
+        publication_id: Annotated[str | None, Query(max_length=64)] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> list[AnalyticsJobView]:
+        return analytics.jobs(status=job_status, publication_id=publication_id, limit=limit)
+
+    @app.get("/analytics/jobs/{job_id}")
+    def get_analytics_job(job_id: str, analytics: AnalyticsServiceDep) -> AnalyticsJobView:
+        return analytics.job(job_id)
+
+    @app.post("/analytics/jobs/{job_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+    def retry_analytics_job(job_id: str, analytics: AnalyticsServiceDep) -> AnalyticsJobView:
+        """Queue a failed job again (e.g. ``auth`` after fixing the token). 409 for
+        ``not_found``/``bad_request`` (a retry cannot succeed) or another state."""
+        return analytics.retry_job(job_id)
 
     @app.get("/reviews/pending")
     def pending_reviews(

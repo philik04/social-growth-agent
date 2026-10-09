@@ -11,13 +11,18 @@ currency = "USD"
 source = "Not configured: prices intentionally left blank. See developer.x.com and openai.com/api/pricing."
 
 # Providers that never cost money: synthetic fixtures and the deterministic fake agents.
-unbilled_providers = ["mock_fixtures", "fake"]
+unbilled_providers = ["mock_fixtures", "fake", "mock_analytics"]
 
 [x]
-# post_read = 0.0   # price per post read (X API v2, pay-per-use)
+# post_read = 0.0   # price per post read (X API v2, pay-per-use): research results AND
+#                   # analytics metric reads (GET /2/tweets?ids=...) use this unit
 # user_read = 0.0   # price per user object read (expansions)
-# post_create = 0.0 # price per post created (publishing); unset where posting is not
-#                   # billed per call, in which case publishes are only counted
+# post_create = 0.0 # price per post created (publishing). X bills post creation; while
+#                   # unset, publish lines show up under missing_prices, not as free
+#
+# Not modelled: X lists a lower "owned reads" rate for some reads of your own data.
+# Whether metric lookups by id qualify is not verified, so analytics reads are
+# estimated at post_read (an upper bound).
 
 [openai.models."gpt-4.1-mini"]
 # input_per_million = 0.0

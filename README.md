@@ -3,8 +3,12 @@
 An agentic orchestration system that grows a creator's or founder's presence on X by running a
 closed loop: **research → generate → critique → human approval → publish → analyze → update strategy**.
 
-> Status: **Phase 5, publishing.** Approved content can be published to X, as a separate
-> explicit request: one durable publication intent, a lease-based worker that makes exactly
+> Status: **Phase 6, analytics collection.** Published posts get public-metric snapshots at
+> fixed ages (1h, 24h, 72h by default), collected by a lease-based worker with a durable
+> request ledger and a bounded backoff, each joined back to the research, critique, approval
+> and strategy that produced the post ([docs/ANALYTICS.md](docs/ANALYTICS.md)). No
+> interpretation and no automatic strategy change yet. Approved content can be published to
+> X, as a separate explicit request: one durable publication intent, a lease-based worker that makes exactly
 > one platform call per attempt, scheduling, and an explicit `unknown` state for outcomes X
 > cannot confirm (never retried on its own). Runs live in PostgreSQL and survive process
 > restarts; a REST API starts runs, lists pending reviews and takes approve / reject / edit /
@@ -78,6 +82,12 @@ TEST_DATABASE_URL=$DATABASE_URL uv run pytest          # full suite incl. DB tes
 | `POST` | `/publications/{id}/retry` | queue a `failed` publication again, where the category allows it |
 | `POST` | `/publications/{id}/resolve` | close an `unknown` publication with what a human established |
 | `POST` | `/publications/{id}/cancel` | withdraw an unclaimed `scheduled`/`ready` publication |
+| `GET` | `/publications/{id}/metrics` | metric snapshots by target age, with capture delay, actual age and on-target flag |
+| `GET` | `/publications/{id}/lineage` | publication → candidate, critiques, approval → findings → source posts → strategy, and metrics |
+| `POST` | `/publications/{id}/analytics/backfill` | create missing snapshot jobs for a published post (202; idempotent; `?dry_run=true`) |
+| `GET` | `/posts?since=&until=&account_id=&status=&limit=` | published posts with their latest snapshot |
+| `GET` | `/analytics/jobs?status=&publication_id=` | snapshot jobs and their attempts; `GET /analytics/jobs/{id}` for one |
+| `POST` | `/analytics/jobs/{id}/retry` | queue a `failed` job again where the category allows it |
 | `GET` | `/health` | app and database status |
 
 ```bash
@@ -122,6 +132,23 @@ resolves them. A rate limit (429) with a reset time goes back to `ready` behind
 `retry_not_before`: the worker skips it until the reset and retries it then, without sleeping,
 bounded by `PUBLISH_MAX_ATTEMPTS`. Auth failures wait for a manual retry. Exactly-once delivery
 is not claimed: `POST /2/tweets` has no idempotency key.
+
+### Collecting metrics
+
+```bash
+# the whole analytics lifecycle offline and free (mock provider, stepped clock)
+DATABASE_URL=postgresql://sga@localhost:5433/sga \
+  uv run python -m social_growth_agent.services.analytics_demo
+
+uv run sga-analytics-worker --once                               # collect due snapshots
+uv run sga-analytics-worker backfill --publication $PUB          # explicit; never on startup
+curl -s localhost:8000/publications/$PUB/metrics
+```
+
+`ANALYTICS_PROVIDER=x` reads `GET /2/tweets?ids=` with the read-only `X_BEARER_TOKEN` (each
+returned post is a billed post read). The live check is opt-in and read-only:
+`RUN_LIVE_X_ANALYTICS_TESTS=1 ... python -m social_growth_agent.services.x_analytics_demo <post-id>`,
+and it only reads posts this application published. See [docs/ANALYTICS.md](docs/ANALYTICS.md).
 
 ### Live publishing (opt-in, creates ONE real post)
 
@@ -208,15 +235,16 @@ src/social_growth_agent/
   policies/       content policy (hard rules), critic gate, human edit policy, research + publish rules
   graph/          state, nodes, pure routing, builder, checkpoint serialization
   agents/         research, content, critic, prompts/*.md, deterministic fakes
-  providers/      LLM + social-platform protocols, OpenAI adapter, x/ (research + publishing), mocks/
-  services/       WorkflowService, RunService, PublicationService, PublisherWorker, runtime, demos
-  persistence/    SQLAlchemy tables, Alembic migrations, recorder, usage/operation ledgers, publications, checkpointer, sga-db
+  providers/      LLM + social-platform protocols, OpenAI adapter, x/ (research, publishing, analytics), mocks/
+  services/       WorkflowService, RunService, PublicationService, PublisherWorker, AnalyticsWorker, runtime, demos
+  persistence/    SQLAlchemy tables, Alembic migrations, recorder, ledgers, publications, analytics, lineage, checkpointer, sga-db
+  analytics/      observed derived metrics (pure, NULL-propagating)
   accounting/     price list (pricing.toml) and cost estimates
-  api/            FastAPI app: run, review, resume, usage and publication endpoints
+  api/            FastAPI app: run, review, resume, usage, publication and analytics endpoints
   evaluation/     critic evaluation harness
   observability/  structured logging, timing
 tests/
-docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ROADMAP.md
+docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ANALYTICS.md, ROADMAP.md
 pricing.toml      prices for cost estimates (blank by default; never in code)
 docker-compose.yml  local PostgreSQL only
 ```

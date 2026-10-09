@@ -4,7 +4,9 @@ These tables are a projection of graph state (see ``recorder.py``), plus usage l
 that are written at call time (``research_fetches``, ``llm_calls``, and since Phase 5 the
 started/finished ``provider_operations``). Publishing (Phase 5) is not graph state: the
 ``publications`` and ``publication_attempts`` tables are written only by the publication
-service and the publisher worker. Execution state (where a run resumes)
+service and the publisher worker. Analytics (Phase 6) is not graph state either:
+``analytics_jobs``, ``analytics_requests``, ``analytics_attempts`` and ``post_metrics``
+are written by the analytics service and worker. Execution state (where a run resumes)
 lives in LangGraph's checkpoint tables, which are not declared here.
 
 Provenance is enforced with foreign keys: a finding's evidence must reference a post
@@ -355,6 +357,11 @@ class PublicationRow(Base):
     provider_post_url: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(Timestamp)
     published_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    """When this application *recorded* the publication as published (worker success, or
+    a human resolve). Not the platform's creation time: see ``provider_created_at``."""
+    provider_created_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    """The post's creation time as reported by the platform (Phase 6, first metrics
+    read). NULL until observed; never filled in from ``published_at``."""
     failure_category: Mapped[str | None] = mapped_column(String(32))
     failure_message: Mapped[str | None] = mapped_column(Text)
     rate_limit_reset_at: Mapped[datetime | None] = mapped_column(Timestamp)
@@ -416,6 +423,136 @@ class ProviderOperationRow(Base):
     error_type: Mapped[str | None] = mapped_column(String(128))
     latency_ms: Mapped[float | None] = mapped_column(Float)
     usage_records: Mapped[int | None] = mapped_column(Integer)
+
+
+# --- analytics (Phase 6) ----------------------------------------------------------------
+
+ANALYTICS_JOB_STATUSES = ("scheduled", "collecting", "collected", "failed", "cancelled")
+
+
+class AnalyticsJobRow(Base):
+    """One planned metrics snapshot of one published post (work state, leased).
+
+    ``UNIQUE (publication_id, snapshot_age)``: enqueueing twice (publish, backfill, a
+    restart) can never plan a second snapshot for the same age.
+    """
+
+    __tablename__ = "analytics_jobs"
+    __table_args__ = (
+        UniqueConstraint("publication_id", "snapshot_age", name="uq_analytics_jobs_target"),
+        CheckConstraint(
+            "status IN (" + ", ".join(f"'{s}'" for s in ANALYTICS_JOB_STATUSES) + ")",
+            name="status",
+        ),
+        CheckConstraint("attempt_count >= 0", name="attempt_count"),
+        Index("ix_analytics_jobs_due", "status", "scheduled_for"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    publication_id: Mapped[str] = mapped_column(ForeignKey("publications.id"), index=True)
+    snapshot_age: Mapped[str] = mapped_column(String(16))
+    age_seconds: Mapped[int] = mapped_column(Integer)
+    schedule_basis: Mapped[str] = mapped_column(String(32))
+    basis_at: Mapped[datetime] = mapped_column(Timestamp)
+    scheduled_for: Mapped[datetime] = mapped_column(Timestamp)
+    original_scheduled_for: Mapped[datetime | None] = mapped_column(Timestamp)
+    """Set when reconciliation moved ``scheduled_for`` to the verified creation time."""
+    origin: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    claimed_by: Mapped[str | None] = mapped_column(String(128))
+    claimed_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_base: Mapped[int] = mapped_column(Integer, default=0)
+    """``attempt_count`` at the last manual retry: the automatic bound applies to the
+    attempts made since (``attempt_count - attempt_base``)."""
+    retry_not_before: Mapped[datetime | None] = mapped_column(Timestamp)
+    failure_category: Mapped[str | None] = mapped_column(String(32))
+    failure_message: Mapped[str | None] = mapped_column(Text)
+    rate_limit_reset_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    collected_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        Timestamp, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AnalyticsRequestRow(Base):
+    """Started ledger for analytics: one row per provider request, committed before the
+    call and finalized after it. No ``finished_at`` means the process died mid-call."""
+
+    __tablename__ = "analytics_requests"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(128))
+    provider: Mapped[str] = mapped_column(String(32))
+    metrics_scope: Mapped[str] = mapped_column(String(32))
+    post_ids: Mapped[list[str]] = mapped_column(Json)
+    started_at: Mapped[datetime] = mapped_column(Timestamp, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    outcome: Mapped[str] = mapped_column(String(16))
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    error_category: Mapped[str | None] = mapped_column(String(32))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    posts_returned: Mapped[int | None] = mapped_column(Integer)
+    rate_limit_remaining: Mapped[int | None] = mapped_column(Integer)
+    rate_limit_reset_at: Mapped[datetime | None] = mapped_column(Timestamp)
+
+
+class AnalyticsAttemptRow(Base):
+    """One job's part in one request: the exact response-to-publication mapping, and the
+    per-publication read count used for cost."""
+
+    __tablename__ = "analytics_attempts"
+    __table_args__ = (UniqueConstraint("job_id", "attempt", name="uq_analytics_attempts_attempt"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[str] = mapped_column(ForeignKey("analytics_requests.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("analytics_jobs.id"), index=True)
+    publication_id: Mapped[str] = mapped_column(ForeignKey("publications.id"), index=True)
+    provider_post_id: Mapped[str] = mapped_column(String(64))
+    attempt: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[str] = mapped_column(String(16))
+    failure_category: Mapped[str | None] = mapped_column(String(32))
+    started_at: Mapped[datetime] = mapped_column(Timestamp)
+    finished_at: Mapped[datetime | None] = mapped_column(Timestamp)
+
+
+class PostMetricRow(Base):
+    """An immutable metrics observation. Written only when the platform returned the
+    post; every count is nullable (NULL = not reported, never a stand-in for 0).
+
+    ``UNIQUE (job_id)`` and ``UNIQUE (publication_id, snapshot_age)``: a restart, a
+    duplicate claim or a re-run can never store a second snapshot for the same age.
+    """
+
+    __tablename__ = "post_metrics"
+    __table_args__ = (
+        UniqueConstraint("publication_id", "snapshot_age", name="uq_post_metrics_target"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("analytics_jobs.id"), unique=True)
+    publication_id: Mapped[str] = mapped_column(ForeignKey("publications.id"), index=True)
+    request_id: Mapped[str] = mapped_column(ForeignKey("analytics_requests.id"))
+    platform: Mapped[str] = mapped_column(String(16))
+    provider: Mapped[str] = mapped_column(String(32))
+    metrics_scope: Mapped[str] = mapped_column(String(32))
+    provider_post_id: Mapped[str] = mapped_column(String(64))
+    snapshot_age: Mapped[str] = mapped_column(String(16))
+    target_age_seconds: Mapped[int] = mapped_column(Integer)
+    scheduled_for: Mapped[datetime] = mapped_column(Timestamp)
+    captured_at: Mapped[datetime] = mapped_column(Timestamp)
+    provider_created_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    recorded_published_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    likes: Mapped[int | None] = mapped_column(Integer)
+    reposts: Mapped[int | None] = mapped_column(Integer)
+    replies: Mapped[int | None] = mapped_column(Integer)
+    quotes: Mapped[int | None] = mapped_column(Integer)
+    bookmarks: Mapped[int | None] = mapped_column(Integer)
+    impressions: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
 
 
 Index("ix_runs_created_at", RunRow.created_at.desc())
