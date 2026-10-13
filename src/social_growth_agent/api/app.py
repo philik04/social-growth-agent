@@ -54,6 +54,20 @@ from social_growth_agent.api.schemas import (
 )
 from social_growth_agent.config import AppSettings
 from social_growth_agent.models import AnalyticsJobStatus, PublicationStatus, RunStatus
+from social_growth_agent.models.discovery import (
+    AudienceEntryView,
+    DiscoveryPlan,
+    DiscoveryRequest,
+    DiscoverySessionView,
+    ItemView,
+    ManualExportView,
+    ManualPublicationView,
+    OpportunityView,
+    PurgeRequest,
+    PurgeResult,
+    SourceSpec,
+    StartRunFromOpportunity,
+)
 from social_growth_agent.models.experiment import (
     ExperimentAnalysis,
     ExperimentDesign,
@@ -84,6 +98,13 @@ from social_growth_agent.persistence.views import (
     UsageReport,
 )
 from social_growth_agent.services.analytics import AnalyticsService, BackfillResult
+from social_growth_agent.services.discovery import (
+    DiscoveryService,
+    DismissBody,
+    ExportBody,
+    ManualPublicationBody,
+    OpportunityRunCreated,
+)
 from social_growth_agent.services.evaluations import EvaluationRequest, EvaluationService
 from social_growth_agent.services.experiments import (
     AdoptBody,
@@ -149,6 +170,13 @@ def _experiment_service(request: Request) -> ExperimentService:
     return service
 
 
+def _discovery_service(request: Request) -> DiscoveryService:
+    service = _runtime(request).discovery
+    if service is None:
+        raise PersistenceNotConfiguredError("content discovery is not configured")
+    return service
+
+
 def _review_auth(
     request: Request, authorization: Annotated[str | None, Header()] = None
 ) -> ReviewAuthMethod:
@@ -168,6 +196,7 @@ PublicationServiceDep = Annotated[PublicationService, Depends(_publication_servi
 EvaluationServiceDep = Annotated[EvaluationService, Depends(_evaluation_service)]
 StrategyServiceDep = Annotated[StrategyService, Depends(_strategy_service)]
 ExperimentServiceDep = Annotated[ExperimentService, Depends(_experiment_service)]
+DiscoveryServiceDep = Annotated[DiscoveryService, Depends(_discovery_service)]
 ReviewAuthDep = Annotated[ReviewAuthMethod, Depends(_review_auth)]
 
 
@@ -634,5 +663,117 @@ def create_app(settings: AppSettings | None = None, runtime: Runtime | None = No
         experiment_id: str, experiments: ExperimentServiceDep
     ) -> ExperimentUsageView:
         return experiments.usage(experiment_id)
+
+    # --- content discovery (Phase 9) ------------------------------------------------------
+
+    @app.get("/discovery/sources")
+    def discovery_sources(discovery: DiscoveryServiceDep) -> list[SourceSpec]:
+        """The configured source registry (``discovery.toml``). Read-only."""
+        return list(discovery.registry().sources)
+
+    @app.post("/discovery/plan")
+    def discovery_plan(body: DiscoveryRequest, discovery: DiscoveryServiceDep) -> DiscoveryPlan:
+        """What a session would call and its maximum X read cost. Calls nothing."""
+        return discovery.plan(body)
+
+    @app.post("/discovery/sessions", status_code=status.HTTP_201_CREATED)
+    def run_discovery(
+        body: DiscoveryRequest, auth: ReviewAuthDep, discovery: DiscoveryServiceDep
+    ) -> DiscoverySessionView:
+        """Runs one bounded, read-only session now. Requires the review token: it may
+        call X (billed) and the configured feeds."""
+        return discovery.run_session(body, auth=auth)
+
+    @app.get("/discovery/sessions")
+    def list_discovery_sessions(
+        discovery: DiscoveryServiceDep,
+        account_id: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> list[DiscoverySessionView]:
+        return discovery.list_sessions(account_id=account_id, limit=limit)
+
+    @app.get("/discovery/sessions/{session_id}")
+    def get_discovery_session(
+        session_id: str, discovery: DiscoveryServiceDep
+    ) -> DiscoverySessionView:
+        return discovery.get_session(session_id)
+
+    @app.get("/discovery/sessions/{session_id}/opportunities")
+    def discovery_opportunities(
+        session_id: str, discovery: DiscoveryServiceDep
+    ) -> list[OpportunityView]:
+        return discovery.opportunities(session_id)
+
+    @app.get("/discovery/sessions/{session_id}/audience")
+    def discovery_audience(
+        session_id: str, discovery: DiscoveryServiceDep
+    ) -> list[AudienceEntryView]:
+        """Read-only suggestions of where a contribution could be useful. Nothing here
+        follows, replies to or messages anyone."""
+        return discovery.audience(session_id)
+
+    @app.get("/discovery/opportunities/{opportunity_id}")
+    def get_opportunity(opportunity_id: str, discovery: DiscoveryServiceDep) -> OpportunityView:
+        return discovery.opportunity(opportunity_id)
+
+    @app.get("/discovery/opportunities/{opportunity_id}/items")
+    def opportunity_items(opportunity_id: str, discovery: DiscoveryServiceDep) -> list[ItemView]:
+        """The evidence items with provenance. Purged items show ids and URL only."""
+        return discovery.opportunity_items(opportunity_id)
+
+    @app.post("/discovery/opportunities/{opportunity_id}/dismiss")
+    def dismiss_opportunity(
+        opportunity_id: str, body: DismissBody, auth: ReviewAuthDep, discovery: DiscoveryServiceDep
+    ) -> OpportunityView:
+        return discovery.dismiss(opportunity_id, body, auth=auth)
+
+    @app.post(
+        "/discovery/opportunities/{opportunity_id}/runs", status_code=status.HTTP_202_ACCEPTED
+    )
+    def run_from_opportunity(
+        opportunity_id: str,
+        body: StartRunFromOpportunity,
+        auth: ReviewAuthDep,
+        discovery: DiscoveryServiceDep,
+    ) -> OpportunityRunCreated:
+        """Starts a normal run (research, generation, critique, human review) on the
+        opportunity's stored evidence."""
+        return discovery.start_run(opportunity_id, body, auth=auth)
+
+    @app.post(
+        "/runs/{run_id}/candidates/{candidate_id}/export", status_code=status.HTTP_201_CREATED
+    )
+    def export_candidate(
+        run_id: str,
+        candidate_id: str,
+        body: ExportBody,
+        auth: ReviewAuthDep,
+        discovery: DiscoveryServiceDep,
+    ) -> ManualExportView:
+        """The approved text for a person to post by hand. Never posts anything."""
+        return discovery.export(run_id, candidate_id, body, auth=auth)
+
+    @app.post(
+        "/runs/{run_id}/candidates/{candidate_id}/manual-publication",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def register_manual_publication(
+        run_id: str,
+        candidate_id: str,
+        body: ManualPublicationBody,
+        auth: ReviewAuthDep,
+        discovery: DiscoveryServiceDep,
+    ) -> ManualPublicationView:
+        """Links a post you published by hand (URL or id) to its exported candidate after
+        one read that verifies the author and text. Idempotent."""
+        return discovery.register_manual_publication(run_id, candidate_id, body, auth=auth)
+
+    @app.post("/discovery/purge")
+    def purge_content(
+        body: PurgeRequest, auth: ReviewAuthDep, discovery: DiscoveryServiceDep
+    ) -> PurgeResult:
+        """Removes third-party text (deleted on X, or on request) everywhere it is stored
+        and blocks it from coming back."""
+        return discovery.purge(body, auth=auth)
 
     return app

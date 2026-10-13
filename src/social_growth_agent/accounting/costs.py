@@ -43,6 +43,23 @@ class PublishUsage(BaseModel):
     provider: str
     attempts: int = Field(ge=0, description="Platform post-create calls made.")
     posts_created: int = Field(ge=0, description="Calls that definitely created a post.")
+    posts_with_url: int = Field(
+        default=0,
+        ge=0,
+        description="Of posts_created, those whose text contains a URL (priced separately).",
+    )
+
+
+class VerificationUsage(BaseModel):
+    """Reads made to verify manually published posts (Phase 9). Manual posts themselves
+    are created by a person, not through the API, so they have no create cost here."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    registrations: int = Field(ge=0)
+    post_reads: int = Field(ge=0)
+    user_reads: int = Field(ge=0)
 
 
 class AnalyticsUsage(BaseModel):
@@ -79,6 +96,7 @@ class UsageCounts(BaseModel):
     llm: list[LLMUsage] = Field(default_factory=list)
     publishing: list[PublishUsage] = Field(default_factory=list)
     analytics: list[AnalyticsUsage] = Field(default_factory=list)
+    verification: list[VerificationUsage] = Field(default_factory=list)
 
 
 class CostLine(BaseModel):
@@ -121,6 +139,7 @@ def merge_usage(parts: "list[UsageCounts]") -> UsageCounts:
     llm: dict[tuple[str, str], LLMUsage] = {}
     publishing: dict[str, PublishUsage] = {}
     analytics: dict[str, AnalyticsUsage] = {}
+    verification: dict[str, VerificationUsage] = {}
     for part in parts:
         for r in part.research:
             research[r.provider] = _add(research.get(r.provider), r)
@@ -130,11 +149,14 @@ def merge_usage(parts: "list[UsageCounts]") -> UsageCounts:
             publishing[p.provider] = _add(publishing.get(p.provider), p)
         for a in part.analytics:
             analytics[a.provider] = _add(analytics.get(a.provider), a)
+        for v in part.verification:
+            verification[v.provider] = _add(verification.get(v.provider), v)
     return UsageCounts(
         research=[research[k] for k in sorted(research)],
         llm=[llm[k] for k in sorted(llm)],
         publishing=[publishing[k] for k in sorted(publishing)],
         analytics=[analytics[k] for k in sorted(analytics)],
+        verification=[verification[k] for k in sorted(verification)],
     )
 
 
@@ -160,9 +182,22 @@ def estimate_cost(usage: UsageCounts, prices: PriceList, *, basis: str) -> CostE
     for pub in usage.publishing:
         free = pub.provider in unbilled
         create_price = prices.x.post_create if pub.provider == "x" else None
+        with_url = min(pub.posts_with_url, pub.posts_created)
         lines.append(
-            _line("posts_created", pub.provider, pub.posts_created, "post", create_price, free)
+            _line(
+                "posts_created",
+                pub.provider,
+                pub.posts_created - with_url,
+                "post",
+                create_price,
+                free,
+            )
         )
+        if with_url:
+            url_price = prices.x.post_create_with_url if pub.provider == "x" else None
+            lines.append(
+                _line("posts_created_with_url", pub.provider, with_url, "post", url_price, free)
+            )
     for a in usage.analytics:
         # Same unit as research reads: a post returned by the X API. No separate
         # analytics price is invented.
@@ -170,6 +205,16 @@ def estimate_cost(usage: UsageCounts, prices: PriceList, *, basis: str) -> CostE
         read_price = prices.x.post_read if a.provider == "x" else None
         lines.append(
             _line("analytics_post_reads", a.provider, a.post_reads, "post", read_price, free)
+        )
+    for v in usage.verification:
+        free = v.provider in unbilled
+        read_price = prices.x.post_read if v.provider == "x" else None
+        user_price = prices.x.user_read if v.provider == "x" else None
+        lines.append(
+            _line("verification_post_reads", v.provider, v.post_reads, "post", read_price, free)
+        )
+        lines.append(
+            _line("verification_user_reads", v.provider, v.user_reads, "user", user_price, free)
         )
     for u in usage.llm:
         free = u.provider in unbilled

@@ -90,6 +90,12 @@ own `n`.
 | `origin` | `generated` vs `human_edit` |
 | `format` | only listed when it varies |
 
+Phase 9 records each candidate's `content_intent` (NULL before Phase 9) and shows it in
+lineage, but it is **not** an evaluation dimension yet: intents are new, and adding a
+dimension would change the evaluation config and digests of existing evaluations. Posts
+published by hand and registered (`provider = 'manual'`) are evaluated like any other
+post, from the same X snapshots.
+
 ### Statistics (descriptive only)
 
 Per group and metric: `n`, `missing`, mean, median, p25/p75, min/max, sample standard

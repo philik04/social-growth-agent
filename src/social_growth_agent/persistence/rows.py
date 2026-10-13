@@ -43,7 +43,19 @@ def llm_call_row(run_id: str, c: LLMCall) -> Row:
 
 
 def source_post_row(run_id: str, p: SourcePost) -> Row:
-    data = p.model_dump(exclude={"created_at"})
+    # Discovery provenance (url, publisher, ...) lives on discovery_items, linked via the
+    # run's opportunity; source_posts keeps its Phase 3 shape.
+    data = p.model_dump(
+        exclude={
+            "created_at",
+            "url",
+            "title",
+            "publisher",
+            "source_category",
+            "evidence_type",
+            "verification_status",
+        }
+    )
     return {"run_id": run_id, **data, "post_created_at": p.created_at}
 
 
@@ -74,6 +86,8 @@ def finding_rows(
                 "summary": f.summary,
                 "claim_type": f.claim_type.value,
                 "signal_strength": f.signal_strength,
+                "claim_kind": f.claim_kind.value if f.claim_kind else None,
+                "verification": f.verification.value if f.verification else None,
                 "position": position,
             }
         )

@@ -156,7 +156,7 @@ def test_fresh_database_migrates_to_head_with_checkpoint_tables(base_database_ur
     try:
         upgrade(url)
         upgrade(url)  # idempotent
-        assert current_revision(url) == "0006"
+        assert current_revision(url) == "0007"
         tables = {
             name
             for (name,) in sql(url, "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
@@ -178,7 +178,7 @@ def test_fresh_database_migrates_to_head_with_checkpoint_tables(base_database_ur
         }
         assert not set(APP_TABLES) & remaining
         upgrade(url)
-        assert current_revision(url) == "0006"
+        assert current_revision(url) == "0007"
     finally:
         drop_scratch_database(base_database_url, url)
 

@@ -514,6 +514,44 @@ POST .../adopt (token)           inactive strategy_versions row (origin experime
 - **Humans decide.** Every write needs the review token; nothing starts, stops, publishes,
   adopts or activates on its own. Synthetic results are never adoptable.
 
+## 8g. Content discovery (Phase 9)
+
+Full detail in [CONTENT_DISCOVERY.md](CONTENT_DISCOVERY.md). Discovery sits **in front of**
+the graph, not inside it:
+
+```
+discovery.toml (registry)                     POST /discovery/sessions (token), sga-discovery run
+   |                                                     |
+   v                                                     v
+providers/discovery.py  (feed, GitHub, HN; X via the Phase 3 client)   [no LLM calls]
+   |   one request per source, conditional GET, caps, no pagination, started/finished ledger
+   v
+discovery/ (pure): normalize -> canonical URL -> dedupe -> cluster -> rank -> claim hints
+                   -> intents -> @grok eligibility -> audience shortlist
+   v
+discovery_sessions / fetches / items / sightings / opportunities / evidence / audience
+   |
+POST /discovery/opportunities/{id}/runs (token, intent)
+   v
+RunService.insert_run (unchanged graph)  research_query.discovery_opportunity_id = opp
+   retrieve: EvidenceReplayProvider -> stored items as SourcePosts (0 external reads)
+   research: claim kinds validated in code; verification computed from cited primaries
+   generate/critique: intent + hard rules (mentions, @grok, grounding of links and numbers)
+   human review (unchanged)
+   v
+publish request -> publish_refusals (any @mention: manual only)
+or export -> person posts -> manual-publication (one read: author, text, time) -> analytics
+```
+
+- **The graph is unchanged.** `build_runtime` wraps the research provider in
+  `EvidenceReplayProvider`; queries without an opportunity id reach the configured provider
+  exactly as in Phases 3–8.
+- **Text decides manual-only.** `policies/mentions.py` is checked by the content policy, the
+  publish request, the worker and both publishers; no flag or label can override it.
+- **Retention reaches every copy.** `persistence/retention.py` purges item text, run
+  evidence and LangGraph checkpoint values, and leaves a tombstone that later sessions and
+  replays respect.
+
 ## 9. Layering
 
 ```
@@ -525,6 +563,7 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
           \-> analytics worker -> providers (SocialAnalyticsProvider) + policies (retry) + analytics (derived)
           \-> evaluations -> analytics (evaluation, pure)   strategies -> agents (strategy, evidence digest) + policies (strategy changes)
           \-> experiments -> analytics (experiment, feasibility; pure) + persistence (experiments) + RunService
+          \-> discovery -> providers (discovery sources, PostVerifier) + discovery (pure) + persistence (discovery, retention) + RunService
                      models  <- everything      config -> services.factory, providers.factory
 ```
 
@@ -535,12 +574,44 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
 - Every node appends a `NodeEvent`, every research retrieval appends a `ResearchFetch`, and
   every LLM call appends an `LLMCall` (success or failure,
   latency, tokens). `services/trace.TracePrinter` renders both as a readable run trace. Structured
-  JSON logging is in `observability/`. OpenTelemetry replaces the internals in Phase 10.
+  JSON logging is in `observability/`. OpenTelemetry replaces the internals in Phase 11.
 - Checkpoints deserialize only an explicit allowlist of domain and policy types.
 
 ## 11. Future phases
 
 See [ROADMAP.md](ROADMAP.md). Next structural additions:
 
-- Phase 9: a dashboard for the review queue, run traces, evaluations and experiments.
-- Phase 10: deployment, CI, OpenTelemetry and per-reviewer authentication.
+- Phase 10: a dashboard for the review queue, run traces, evaluations, experiments and
+  discovery.
+- Phase 11: deployment, CI, OpenTelemetry and per-reviewer authentication.
+
+### Future direction: content domains (not built)
+
+Later, several independently configured workflows may run side by side, one per content
+domain (technology and AI; politics and current affairs; entertainment, memes and viral
+culture; fashion and lifestyle). Phase 9 builds only the technology domain, but keeps the
+choices that would block this out of the code:
+
+- **Domain data is configuration.** Sources, vocabulary, generic terms, ranking weights,
+  windows and the shortlist policy all live in `discovery.toml`; `discovery/` holds no
+  subject-specific words. A second domain starts as a second registry file.
+- **One abstraction, later.** A `ContentDomain` (or `AgentProfile`) would bundle what a
+  domain may define for itself: its registry (sources, vocabulary, ranking), strategy
+  defaults, prompts, validation rules (hard rules added to the critic's policy set),
+  content formats and intents, and optionally its own graph composition. The default is
+  the current graph; a domain gets a different composition only when it genuinely needs
+  extra steps (for example a fact-check node), assembled from the existing nodes.
+- **Separation stays explicit.** Accounts, domains, evidence, strategies and performance
+  metrics stay separate records. An account would publish within one or more domains; a
+  nullable `domain_id` on discovery sessions, opportunities, strategy versions and runs
+  would scope ranking, novelty, suppression, diversity and evaluations to one domain, so
+  unrelated subjects are never compared or mixed. Evidence keeps its provenance and
+  verification rules whatever the domain.
+- **Reuse first.** Providers, the fetch ledger, persistence, retention, review,
+  publishing, analytics, evaluation and experiments are domain-neutral and would be
+  shared, not copied.
+- **Political content needs stricter rules, not looser ones.** Factual accuracy and
+  source attribution as hard rules (the grounding rule and claim kinds already do this);
+  contested claims presented with their main positions and sources; no manipulative
+  framing, and no persuasion targeted at individuals or demographic groups; human review
+  as today, with nothing published automatically.

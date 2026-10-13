@@ -35,6 +35,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -92,6 +93,10 @@ class RunRow(Base):
     failure_message: Mapped[str | None] = mapped_column(Text)
     pricing_id: Mapped[str | None] = mapped_column(ForeignKey("pricing_versions.id"))
     strategy_version_ref: Mapped[str | None] = mapped_column(ForeignKey("strategy_versions.id"))
+    # Phase 9 (0007): the discovery opportunity a run was started from (NULL otherwise).
+    opportunity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("discovery_opportunities.id"), index=True
+    )
     """The registered strategy version this run used (Phase 7); NULL for runs created with
     an unregistered inline strategy and for every run created before Phase 7."""
     created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
@@ -190,6 +195,9 @@ class ResearchFindingRow(Base):
     claim_type: Mapped[str] = mapped_column(String(16))
     signal_strength: Mapped[float] = mapped_column(Float)
     position: Mapped[int] = mapped_column(Integer)
+    # Phase 9 (0007): discovery runs only, validated against the cited evidence.
+    claim_kind: Mapped[str | None] = mapped_column(String(24))
+    verification: Mapped[str | None] = mapped_column(String(24))
 
 
 class FindingEvidenceRow(Base):
@@ -235,6 +243,7 @@ class ContentCandidateRow(Base):
     strategy_version: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(Timestamp)
     position: Mapped[int] = mapped_column(Integer)
+    content_intent: Mapped[str | None] = mapped_column(String(32))  # Phase 9 (0007)
 
 
 class CandidateFindingRow(Base):
@@ -345,6 +354,14 @@ class PublicationRow(Base):
         ),
         CheckConstraint("attempt_count >= 0", name="attempt_count"),
         Index("ix_publications_due", "status", "scheduled_for"),
+        # Phase 9 (0007): find the publication of a platform post (manual registration).
+        # Not unique: mock publishers of earlier phases may have reused ids.
+        Index(
+            "ix_publications_provider_post",
+            "platform",
+            "provider_post_id",
+            postgresql_where=text("provider_post_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -912,6 +929,248 @@ class ExperimentResultRow(Base):
     concluded_by: Mapped[str] = mapped_column(String(128))
     auth_method: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+
+
+# --- content discovery (Phase 9, migration 0007) -----------------------------------------
+
+DISCOVERY_SESSION_STATUSES = ("running", "succeeded", "partial", "failed")
+DISCOVERY_FETCH_OUTCOMES = (
+    "started",
+    "succeeded",
+    "empty",
+    "cached",
+    "not_modified",
+    "failed",
+    "skipped",
+)
+OPPORTUNITY_STATUSES = ("open", "used", "dismissed")
+
+
+class DiscoverySessionRow(Base):
+    """One bounded, on-demand discovery sweep. Its request, limits, registry digest and
+    pricing are fixed at start; status and summary are written once, at the end."""
+
+    __tablename__ = "discovery_sessions"
+    __table_args__ = (CheckConstraint(_in("status", DISCOVERY_SESSION_STATUSES), name="status"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16))
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    request: Mapped[dict[str, Any]] = mapped_column(Json)
+    limits: Mapped[dict[str, Any]] = mapped_column(Json)
+    registry_version: Mapped[str] = mapped_column(String(64))
+    registry_sha256: Mapped[str] = mapped_column(String(64))
+    strategy_version_id: Mapped[str | None] = mapped_column(ForeignKey("strategy_versions.id"))
+    pricing_id: Mapped[str | None] = mapped_column(ForeignKey("pricing_versions.id"))
+    requested_by: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    summary: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(Timestamp)
+    finished_at: Mapped[datetime | None] = mapped_column(Timestamp)
+
+
+class DiscoveryFetchRow(Base):
+    """Started/finished ledger: committed as ``started`` before every external call."""
+
+    __tablename__ = "discovery_fetches"
+    __table_args__ = (CheckConstraint(_in("outcome", DISCOVERY_FETCH_OUTCOMES), name="outcome"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("discovery_sessions.id"), index=True)
+    source_id: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(32))
+    provider: Mapped[str] = mapped_column(String(32))
+    outcome: Mapped[str] = mapped_column(String(16))
+    request: Mapped[dict[str, Any]] = mapped_column(Json)
+    requests_made: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    items_returned: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    post_reads: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    user_reads: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    error_category: Mapped[str | None] = mapped_column(String(32))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    rate_limit_reset_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    etag: Mapped[str | None] = mapped_column(String(256))
+    last_modified: Mapped[str | None] = mapped_column(String(64))
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    started_at: Mapped[datetime] = mapped_column(Timestamp)
+    finished_at: Mapped[datetime | None] = mapped_column(Timestamp)
+
+
+class DiscoveryItemRow(Base):
+    """One unique external item. Text fields become NULL when purged (retention or a
+    deletion request); ids, URL and hash stay as audit metadata. A trigger forbids
+    deleting rows, changing their identity and restoring purged text."""
+
+    __tablename__ = "discovery_items"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    item_key: Mapped[str] = mapped_column(String(600), unique=True)
+    source_id: Mapped[str] = mapped_column(String(64))
+    platform: Mapped[str] = mapped_column(String(16))
+    kind: Mapped[str] = mapped_column(String(32))
+    category: Mapped[str] = mapped_column(String(16))
+    evidence_type: Mapped[str] = mapped_column(String(32))
+    tier: Mapped[str] = mapped_column(String(32))
+    verification_status: Mapped[str] = mapped_column(String(24))
+    publisher: Mapped[str] = mapped_column(String(80))
+    provider_item_id: Mapped[str] = mapped_column(String(512))
+    canonical_url: Mapped[str | None] = mapped_column(Text, index=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    text: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(String(128))
+    author_id: Mapped[str | None] = mapped_column(String(64))
+    published_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    first_retrieved_at: Mapped[datetime] = mapped_column(Timestamp)
+    last_retrieved_at: Mapped[datetime] = mapped_column(Timestamp)
+    keywords: Mapped[list[str]] = mapped_column(Json)
+    claim_hints: Mapped[list[str]] = mapped_column(Json)
+    metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    evergreen: Mapped[bool] = mapped_column(Boolean, server_default=false())
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    first_session_id: Mapped[str] = mapped_column(ForeignKey("discovery_sessions.id"))
+    purged_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    purge_reason: Mapped[str | None] = mapped_column(String(32))
+
+
+class DiscoverySightingRow(Base):
+    """Which session saw which item, from which fetch (append-only)."""
+
+    __tablename__ = "discovery_item_sightings"
+
+    session_id: Mapped[str] = mapped_column(ForeignKey("discovery_sessions.id"), primary_key=True)
+    item_id: Mapped[str] = mapped_column(ForeignKey("discovery_items.id"), primary_key=True)
+    fetch_id: Mapped[str] = mapped_column(ForeignKey("discovery_fetches.id"))
+    position: Mapped[int] = mapped_column(Integer)
+    seen_at: Mapped[datetime] = mapped_column(Timestamp)
+
+
+class DiscoveryOpportunityRow(Base):
+    """A ranked content opportunity. Only ``status`` and the dismissal fields change."""
+
+    __tablename__ = "discovery_opportunities"
+    __table_args__ = (CheckConstraint(_in("status", OPPORTUNITY_STATUSES), name="status"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("discovery_sessions.id"), index=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(32), index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    score: Mapped[float] = mapped_column(Float)
+    keywords: Mapped[list[str]] = mapped_column(Json)
+    headline: Mapped[str] = mapped_column(Text)
+    components: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    reasons: Mapped[list[str]] = mapped_column(Json)
+    claim_hints: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    claim_summary: Mapped[dict[str, Any]] = mapped_column(Json)
+    suggested_intents: Mapped[list[str]] = mapped_column(Json)
+    grok: Mapped[dict[str, Any]] = mapped_column(Json)
+    grok_eligible: Mapped[bool] = mapped_column(Boolean)
+    audience_entry_ids: Mapped[list[str]] = mapped_column(Json)
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    status: Mapped[str] = mapped_column(String(16))
+    expires_at: Mapped[datetime] = mapped_column(Timestamp)
+    created_at: Mapped[datetime] = mapped_column(Timestamp)
+    dismissed_by: Mapped[str | None] = mapped_column(String(128))
+    dismissed_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    dismiss_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class OpportunityEvidenceRow(Base):
+    __tablename__ = "opportunity_evidence"
+
+    opportunity_id: Mapped[str] = mapped_column(
+        ForeignKey("discovery_opportunities.id"), primary_key=True
+    )
+    item_id: Mapped[str] = mapped_column(ForeignKey("discovery_items.id"), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16))
+    position: Mapped[int] = mapped_column(Integer)
+
+
+class AudienceEntryRow(Base):
+    """A read-only audience suggestion: topic signals over public posts, nothing else."""
+
+    __tablename__ = "audience_entries"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("discovery_sessions.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    ref: Mapped[str] = mapped_column(String(512))
+    platform: Mapped[str] = mapped_column(String(16))
+    score: Mapped[float] = mapped_column(Float)
+    signals: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    matched_topics: Mapped[list[str]] = mapped_column(Json)
+    explanation: Mapped[str] = mapped_column(Text)
+    evidence_item_ids: Mapped[list[str]] = mapped_column(Json)
+    curated: Mapped[bool] = mapped_column(Boolean)
+    position: Mapped[int] = mapped_column(Integer)
+
+
+class ManualExportRow(Base):
+    """An approved candidate handed to a person to post by hand (append-only)."""
+
+    __tablename__ = "manual_exports"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    candidate_id: Mapped[str] = mapped_column(ForeignKey("content_candidates.id"))
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    content_intent: Mapped[str | None] = mapped_column(String(32))
+    manual_only: Mapped[bool] = mapped_column(Boolean)
+    exported_by: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(Timestamp)
+
+
+class ManualPublicationRow(Base):
+    """A post the user published by hand, verified as the configured account's own and
+    linked to a ``publications`` row so analytics and lineage treat it like any other
+    published post. One per publication and one per platform post (append-only)."""
+
+    __tablename__ = "manual_publications"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    publication_id: Mapped[str] = mapped_column(ForeignKey("publications.id"), unique=True)
+    export_id: Mapped[str] = mapped_column(ForeignKey("manual_exports.id"))
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    candidate_id: Mapped[str] = mapped_column(String(64))
+    platform: Mapped[str] = mapped_column(String(16))
+    provider_post_id: Mapped[str] = mapped_column(String(64))
+    author_id: Mapped[str] = mapped_column(String(64))
+    author_username: Mapped[str | None] = mapped_column(String(64))
+    provider_created_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    text_match: Mapped[str] = mapped_column(String(16))
+    verification_provider: Mapped[str] = mapped_column(String(32))
+    verification_post_reads: Mapped[int] = mapped_column(Integer)
+    verification_user_reads: Mapped[int] = mapped_column(Integer)
+    registered_by: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(Timestamp)
+    __table_args__ = (
+        UniqueConstraint("platform", "provider_post_id", name="uq_manual_publications_post"),
+    )
+
+
+class ContentPurgeRow(Base):
+    """Tombstone: this platform item's text was purged (retention or a deletion request)
+    and must never be stored, replayed or shown to a model again."""
+
+    __tablename__ = "content_purges"
+    __table_args__ = (
+        UniqueConstraint("platform", "provider_item_id", name="uq_content_purges_item"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(16))
+    provider_item_id: Mapped[str] = mapped_column(String(512))
+    reason: Mapped[str] = mapped_column(String(32))
+    requested_by: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    counts: Mapped[dict[str, Any]] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column(Timestamp)
 
 
 Index("ix_runs_created_at", RunRow.created_at.desc())

@@ -61,6 +61,8 @@ class PublishFailureCategory(StrEnum):
     """The worker died (or stalled) while the attempt was in flight."""
     POLICY = "policy"
     """The deterministic publish policy refused it when the worker re-checked."""
+    MANUAL_ONLY = "manual_only"
+    """Phase 9: the text contains an @mention. Never sent, never retried; post by hand."""
     INTERNAL = "internal"
     """An unexpected error inside the publisher; treated as an unknown outcome."""
 
@@ -105,6 +107,19 @@ class PublishedPost(DomainModel):
     platform_post_id: str
     content: str
     published_at: datetime = Field(default_factory=utc_now)
+
+
+class PlatformPost(DomainModel):
+    """One post as the platform reports it, read to verify a manual publication
+    (Phase 9). ``text`` is used for the comparison only and is never stored."""
+
+    provider_post_id: str
+    author_id: str
+    author_username: str | None = None
+    text: str
+    created_at: datetime | None = None
+    post_reads: int = Field(default=1, ge=0)
+    user_reads: int = Field(default=0, ge=0)
 
 
 class PublishStatus(StrEnum):

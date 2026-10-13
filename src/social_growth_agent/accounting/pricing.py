@@ -38,6 +38,12 @@ class XPrices(BaseModel):
         description="Per post created (publishing). X bills post creation; while this is "
         "unset, publish lines are reported as missing prices, never as free.",
     )
+    post_create_with_url: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description="Per post created through the API whose text contains a URL (X prices "
+        "these separately, higher). Unset: such posts are reported as a missing price.",
+    )
     user_read: Decimal | None = Field(default=None, ge=0, description="Per user object read.")
 
 
@@ -64,8 +70,12 @@ class PriceList(BaseModel):
         return f"{self.version}:{digest[:12]}"
 
     def content(self) -> dict[str, Any]:
-        """Canonical JSON form; Decimals are stored as strings so nothing is rounded."""
-        return self.model_dump(mode="json")
+        """Canonical JSON form; Decimals are stored as strings so nothing is rounded.
+        Fields added later are omitted while unset, so existing price lists keep their id."""
+        content = self.model_dump(mode="json")
+        if content["x"].get("post_create_with_url") is None:
+            content["x"].pop("post_create_with_url", None)
+        return content
 
     def llm_price(self, provider: str, model: str) -> ModelPrice | None:
         return self.openai.get(model) if provider == "openai" else None

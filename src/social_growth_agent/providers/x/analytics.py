@@ -29,6 +29,7 @@ from social_growth_agent.models import (
     AnalyticsFailureCategory,
     AnalyticsFetch,
     MetricsScope,
+    PlatformPost,
     PostMetricMiss,
     PostMetricRecord,
     ProviderErrorCategory,
@@ -83,6 +84,36 @@ class _RawProblem(_Raw):
 
 class _RawLookup(_Raw):
     data: list[_RawPost] = []
+    errors: list[_RawProblem] = []
+
+
+VERIFY_POST_FIELDS = "author_id,created_at,text,note_tweet"
+
+
+class _RawNote(_Raw):
+    text: str | None = None
+
+
+class _RawAuthoredPost(_Raw):
+    id: str
+    author_id: str
+    text: str = ""
+    created_at: datetime | None = None
+    note_tweet: _RawNote | None = None
+
+
+class _RawUser(_Raw):
+    id: str
+    username: str | None = None
+
+
+class _RawIncludes(_Raw):
+    users: list[_RawUser] = []
+
+
+class _RawVerify(_Raw):
+    data: list[_RawAuthoredPost] = []
+    includes: _RawIncludes | None = None
     errors: list[_RawProblem] = []
 
 
@@ -154,6 +185,54 @@ class XAnalyticsProvider:
             latency_ms=latency_ms,
             remaining=response.rate_limit.remaining,
             reset_at=response.rate_limit.reset_at,
+        )
+
+    def lookup_post(self, post_id: str) -> PlatformPost | None:
+        """Phase 9 manual-publication check: the post's author, full text and creation
+        time (``GET /2/tweets?ids=<id>`` with ``expansions=author_id``). One read."""
+        if not post_id.isdigit():
+            raise AnalyticsError(
+                "post ids are numeric", failure_category=AnalyticsFailureCategory.BAD_REQUEST
+            )
+        started = time.perf_counter()
+        failure: AnalyticsError | None = None
+        try:
+            response = self._client.get(
+                LOOKUP_PATH,
+                {
+                    "ids": post_id,
+                    "tweet.fields": VERIFY_POST_FIELDS,
+                    "expansions": "author_id",
+                    "user.fields": "username",
+                },
+            )
+        except ProviderError as exc:
+            failure = _analytics_error(exc, (time.perf_counter() - started) * 1000)
+        if failure is not None:
+            raise failure
+        body: _RawVerify | None = None
+        with contextlib.suppress(ValidationError):
+            body = _RawVerify.model_validate(response.body)
+        if body is None:
+            raise AnalyticsError(
+                "X API returned a lookup body in an unexpected shape",
+                failure_category=AnalyticsFailureCategory.MALFORMED_RESPONSE,
+                http_status=200,
+            )
+        post = next((p for p in body.data if p.id == post_id), None)
+        if post is None:
+            return None
+        users = body.includes.users if body.includes else []
+        username = next((u.username for u in users if u.id == post.author_id), None)
+        full = post.note_tweet.text if post.note_tweet and post.note_tweet.text else post.text
+        return PlatformPost(
+            provider_post_id=post.id,
+            author_id=post.author_id,
+            author_username=username,
+            text=full,
+            created_at=post.created_at,
+            post_reads=len(body.data),
+            user_reads=len(users),
         )
 
 

@@ -89,6 +89,21 @@ The worker additionally checks that the candidate's content still hashes to the
 `content_sha256` stored on the intent, so an edited candidate can never be published
 under an older intent.
 
+Phase 9 adds two refusals:
+
+8. the content contains no `@mention` (any account, including `@grok` and the full-width
+   `＠`), checked at request time and in the worker. The text decides, not the intent
+   label. A mention is **manual publication only**: the request answers 409, and a row
+   that reached the queue anyway ends `failed` with category `manual_only` before any
+   call. The X and mock publishers
+   refuse it again before any HTTP request;
+9. at request time, the candidate was not exported for manual publication (it would be
+   posted twice).
+
+Manual-only drafts are exported, posted by a person and registered afterwards; the
+registration creates a `published` row with `provider = 'manual'` and the usual analytics
+jobs. See [CONTENT_DISCOVERY.md](CONTENT_DISCOVERY.md#manual-only-mentions).
+
 ## Idempotency, and the limits of exactly-once
 
 - `idempotency_key = sha256("x:<run_id>:<candidate_id>")`, `UNIQUE`. `(run_id,
@@ -289,9 +304,12 @@ curl -s localhost:8000/publications/$PUB                           # published +
 - Recording a publication as published (worker or resolve) creates its analytics jobs in
   the same transaction (`ANALYTICS_ENQUEUE_ON_PUBLISH=true`). Publications from before
   Phase 6 get jobs only through an explicit backfill. See [ANALYTICS.md](ANALYTICS.md).
-- X bills post creation (per request, with a higher rate for posts containing a URL, per
-  X's pricing page). Prices are configuration: `x.post_create` in `pricing.toml` is blank
-  by default, so publish lines appear under `missing_prices` rather than as free.
+- X bills post creation per request, at a higher rate for posts containing a URL
+  ($0.015 and $0.200 on X's pricing page, checked 2026-10-13). Phase 9 counts API posts
+  with a link separately (`x.post_create_with_url`, its own cost line). Prices are
+  configuration: both are blank in `pricing.toml` by default, so publish lines appear under
+  `missing_prices` rather than as free. A manually registered post has no create cost; its
+  one verification read is reported under `verification`.
 
 ## Live publishing safety
 
@@ -318,6 +336,7 @@ afterwards, and nothing posts merely because credentials are configured.
 
 - No analytics here: metrics collection is a separate worker (Phase 6, [ANALYTICS.md](ANALYTICS.md)).
 - No timeline reconciliation of `unknown` publications; resolving is manual.
+- No automated mentions: any `@mention` is manual-only (Phase 9).
 - No threads, media, replies or quote posts: `POST /2/tweets` is called with `{"text":
   ...}` and nothing else.
 - No multi-account publishing, and so no OAuth 2.0 PKCE token store.

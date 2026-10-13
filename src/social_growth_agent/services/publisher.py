@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from social_growth_agent.errors import (
     DatabaseUnavailableError,
+    ManualOnlyError,
     NotPublishableError,
     PublishError,
     PublishNotSentError,
@@ -57,6 +58,7 @@ from social_growth_agent.persistence import publications as pubs
 from social_growth_agent.persistence import repository as repo
 from social_growth_agent.persistence.tables import ContentCandidateRow, PublicationRow
 from social_growth_agent.policies import content_sha256, publish_refusals
+from social_growth_agent.policies.mentions import MANUAL_ONLY_REASON, is_manual_only
 from social_growth_agent.policies.retry import Backoff
 from social_growth_agent.providers import SocialPublisher
 
@@ -150,6 +152,14 @@ class PublisherWorker:
         failure: every outcome becomes an explicit state."""
         try:
             prepared = self._prepare(publication_id)
+        except ManualOnlyError as exc:
+            self._record_failure(
+                publication_id,
+                attempt_id=None,
+                category=PublishFailureCategory.MANUAL_ONLY,
+                message=str(exc),
+            )
+            return "failed"
         except NotPublishableError as exc:
             self._record_failure(
                 publication_id,
@@ -252,6 +262,10 @@ class PublisherWorker:
             refusals.append("the candidate's content changed since the intent was created")
         if content_sha256(row.content) != row.content_sha256:
             refusals.append("the stored publication content does not match its hash")
+        if is_manual_only(row.content) and MANUAL_ONLY_REASON not in refusals:
+            refusals.append(MANUAL_ONLY_REASON)
+        if MANUAL_ONLY_REASON in refusals:
+            raise ManualOnlyError("; ".join(refusals))
         if refusals:
             raise NotPublishableError("; ".join(refusals))
 

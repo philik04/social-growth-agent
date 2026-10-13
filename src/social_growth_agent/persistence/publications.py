@@ -105,6 +105,7 @@ def _candidate(session: Session, row: ContentCandidateRow) -> ContentCandidate:
         target_audience=row.target_audience,
         content=row.content,
         rationale=row.rationale or "",
+        content_intent=row.content_intent,
         origin=row.origin,
         revises_candidate_id=row.revises_candidate_id,
         created_at=row.created_at,
@@ -496,20 +497,27 @@ def run_publications(session: Session, run_id: str) -> list[PublicationView]:
     return [publication_view(session, row) for row in rows]
 
 
-def publish_operation_counts(session: Session, run_id: str) -> list[tuple[str, int, int]]:
-    """(provider, attempts, published) per provider for one run: operations, not prices."""
+def publish_operation_counts(session: Session, run_id: str) -> list[tuple[str, int, int, int]]:
+    """(provider, attempts, published, published with a URL) per provider for one run:
+    operations, not prices. Manually registered posts (Phase 9) have no attempts."""
+    succeeded = PublicationAttemptRow.outcome == AttemptOutcome.SUCCEEDED.value
     rows = session.execute(
         select(
             PublicationAttemptRow.provider,
             func.count(),
-            func.count().filter(PublicationAttemptRow.outcome == AttemptOutcome.SUCCEEDED.value),
+            func.count().filter(succeeded),
+            func.count().filter(succeeded, PublicationRow.content.op("~*")(URL_PATTERN)),
         )
         .join(PublicationRow, PublicationRow.id == PublicationAttemptRow.publication_id)
         .where(PublicationRow.run_id == run_id)
         .group_by(PublicationAttemptRow.provider)
         .order_by(PublicationAttemptRow.provider)
     )
-    return [(provider, attempts, published) for provider, attempts, published in rows]
+    return [(provider, attempts, published, urls) for provider, attempts, published, urls in rows]
+
+
+URL_PATTERN = r"https?://"
+"""A post containing a link: X prices API-created posts with URLs separately."""
 
 
 def has_active_publication(session: Session, run_id: str) -> bool:

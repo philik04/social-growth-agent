@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from social_growth_agent.errors import PublicationNotFoundError
 from social_growth_agent.models import PublicationStatus, ReviewAction
 from social_growth_agent.persistence import analytics as adb
+from social_growth_agent.persistence import discovery as ddb
 from social_growth_agent.persistence import publications as pubs
 from social_growth_agent.persistence import repository as repo
 from social_growth_agent.persistence.tables import (
@@ -26,6 +27,7 @@ from social_growth_agent.persistence.tables import (
 from social_growth_agent.persistence.views import (
     AnalyticsSummary,
     DecisionView,
+    DiscoveryLineage,
     LineageView,
     PublishedPostView,
 )
@@ -63,6 +65,26 @@ def publication_lineage(session: Session, publication_id: str) -> LineageView:
         strategy=run.strategy,
         account=run.account,
         metrics=adb.snapshots(session, publication_id),
+        discovery=_discovery(session, row, run),
+    )
+
+
+def _discovery(session: Session, row: PublicationRow, run: RunRow) -> DiscoveryLineage | None:
+    manual = ddb.manual_publication_for_publication(session, row.id)
+    export = ddb.latest_export(session, row.run_id, row.candidate_id)
+    if run.opportunity_id is None and manual is None and export is None:
+        return None
+    opportunity = (
+        None if run.opportunity_id is None else ddb.get_opportunity(session, run.opportunity_id)
+    )
+    evidence = [] if opportunity is None else ddb.opportunity_view(session, opportunity).evidence
+    return DiscoveryLineage(
+        opportunity_id=run.opportunity_id,
+        session_id=None if opportunity is None else opportunity.session_id,
+        evidence=evidence,
+        manual_export_id=(manual.export_id if manual else None) or (export.id if export else None),
+        manual_publication_id=manual.id if manual else None,
+        verified_author_id=manual.author_id if manual else None,
     )
 
 

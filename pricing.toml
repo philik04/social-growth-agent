@@ -19,6 +19,15 @@ unbilled_providers = ["mock_fixtures", "fake", "mock_analytics"]
 # user_read = 0.0   # price per user object read (expansions)
 # post_create = 0.0 # price per post created (publishing). X bills post creation; while
 #                   # unset, publish lines show up under missing_prices, not as free
+# post_create_with_url = 0.0  # price per API-created post whose text contains a URL
+#                   # (X prices these separately and higher). Phase 9 discovery posts
+#                   # that cite a source link fall under this line when published by API.
+#
+# Checked on 2026-10-13 against X's pay-per-use pricing page (developer docs): post read
+# 0.005, user read 0.010, post create 0.015, post create with a URL 0.200 (USD). They
+# are NOT filled in above; copy them in (and bump version/as_of) once you confirm them
+# for your own account and plan. Discovery's worst-case session estimate (2 x 10 post
+# reads + 20 user reads = 0.30 USD) covers discovery reads only.
 #
 # Not modelled: X lists a lower "owned reads" rate for some reads of your own data.
 # Whether metric lookups by id qualify is not verified, so analytics reads are

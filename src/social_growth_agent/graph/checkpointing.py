@@ -11,6 +11,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from social_growth_agent import models
 from social_growth_agent.graph.state import RunConfig
 from social_growth_agent.policies import ContentPolicy, CriticGate
+from social_growth_agent.policies.grounding import EvidenceGrounding
 
 
 def checkpoint_types() -> list[type]:
@@ -19,6 +20,7 @@ def checkpoint_types() -> list[type]:
         RunConfig,
         ContentPolicy,
         CriticGate,
+        EvidenceGrounding,
     ]
 
 

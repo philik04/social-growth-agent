@@ -34,6 +34,7 @@ from social_growth_agent.errors import (
     PublishRejectedError,
 )
 from social_growth_agent.models import PublishFailureCategory, PublishRequest, PublishResult
+from social_growth_agent.policies.mentions import MANUAL_ONLY_REASON, is_manual_only
 from social_growth_agent.providers.x.client import (
     USER_AGENT,
     X_API_BASE_URL,
@@ -97,6 +98,12 @@ class XPublisher:
         self._http.close()
 
     def publish(self, request: PublishRequest) -> PublishResult:
+        # Phase 9, last line of defence: a mention is never sent, whoever called this.
+        if is_manual_only(request.content):
+            raise PublishRejectedError(
+                f"not sent: {MANUAL_ONLY_REASON}",
+                failure_category=PublishFailureCategory.MANUAL_ONLY,
+            )
         url = self._base_url + CREATE_POST_PATH
         headers = {"Authorization": authorization_header("POST", url, self._credentials)}
         started = time.perf_counter()

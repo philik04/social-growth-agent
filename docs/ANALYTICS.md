@@ -149,7 +149,7 @@ sets `attempt_base = attempt_count`, granting a fresh automatic budget while
 | Method | Path | |
 |---|---|---|
 | GET | `/publications/{id}/metrics` | snapshots ordered by target age, with timing fields and observed derived rates |
-| GET | `/publications/{id}/lineage` | publication → candidate (critiques) → revision chain → approval → findings → cited source posts → run strategy and account → metrics |
+| GET | `/publications/{id}/lineage` | publication → candidate (critiques) → revision chain → approval → findings → cited source posts → run strategy and account → metrics; Phase 9 adds `discovery`: opportunity, session, evidence items, manual export and registration |
 | POST | `/publications/{id}/analytics/backfill?dry_run=` | create missing jobs (202); idempotent; 409 unless published; reads nothing |
 | GET | `/posts?since=&until=&account_id=&status=&limit=` | published posts, newest first, with their latest snapshot; `status` = a job status; datetimes need a timezone |
 | GET | `/analytics/jobs?status=&publication_id=&limit=` | jobs with their attempts |

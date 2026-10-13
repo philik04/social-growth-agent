@@ -512,7 +512,7 @@ def test_0006_applies_to_a_populated_phase_7_database(base_database_url):
             "'registered') RETURNING id",
         )
         upgrade(url)
-        assert current_revision(url) == "0006"
+        assert current_revision(url) == "0007"
         assert sql(url, "SELECT source_experiment_result_id FROM strategy_versions") == [(None,)]
         for table in ("experiments", "experiment_arms", "experiment_assignments"):
             assert count(url, table) == 0
@@ -521,7 +521,7 @@ def test_0006_applies_to_a_populated_phase_7_database(base_database_url):
         command.downgrade(alembic_config(url), "0005")
         assert sql(url, "SELECT id FROM strategy_versions") == [("sv_p7",)]
         upgrade(url)
-        assert current_revision(url) == "0006"
+        assert current_revision(url) == "0007"
     finally:
         drop_scratch_database(base_database_url, url)
 

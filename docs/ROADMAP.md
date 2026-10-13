@@ -132,11 +132,42 @@ Not done in Phase 8 (deliberate): no sequential or Bayesian testing, no multi-fa
 designs, no automatic start, stop, adoption, activation or publishing, no posting-time
 experiments, no reviewer identities (one shared token).
 
-## Phase 9: Dashboard
-- Next.js UI: review queue, run traces, performance and experiment views.
+## Phase 9: Content discovery, audience intelligence and @grok questions (done)
+- On-demand, bounded discovery sessions over a source registry (`discovery.toml`):
+  official feeds, arXiv, GitHub releases, Hacker News and X search through the Phase 3
+  client. One request per source, no pagination, no retries, 6 h cache, conditional
+  requests; every item keeps its provenance. Durable, auditable sessions and fetch ledger.
+- A deterministic, explainable opportunity shortlist (weighted components, freshness,
+  own-post and repeat suppression, no controversy bonus) and a read-only audience
+  shortlist. No new agent; the LangGraph topology is unchanged.
+- A run from an opportunity replays its stored evidence (0 external reads). The Research
+  Agent labels claim kinds, validated in code; `corroborated` needs the same specific
+  claim in primary sources from two publishers. Links and numbers in drafts must come
+  from the evidence. Content intents are recorded on candidates and are independent of
+  `HookType`; experiments refuse `grok_question`.
+- Any `@mention` is manual-only, checked on the text at generation, review, the publish
+  request, the worker and the publishers. Approved drafts are exported and posted by
+  hand, then registered from their URL after a one-read check of author, text and time;
+  registration is idempotent and reuses analytics and lineage.
+- Seven @grok criteria, at most one per session, no quota. Deletion requests and a 30-day
+  X retention window purge third-party text from items, run evidence and checkpoints,
+  with tombstones that keep it out of later sessions and runs.
+- `post_create_with_url` priced separately; verified X prices documented, left unset.
+  Migration `0007`, `sga-discovery` CLI, offline and opt-in live demos. See
+  [CONTENT_DISCOVERY.md](CONTENT_DISCOVERY.md) and [API.md](API.md).
+- **Exit:** met offline: discovery to a reviewed draft and a registered manual post runs
+  end to end on fixtures and PostgreSQL. Not yet shown against live sources at volume.
+
+Not done in Phase 9 (deliberate): no scheduler for sessions or the retention sweep (run
+`sga-discovery purge-expired` from cron), no automatic follows, likes, replies, mentions
+or DMs, no X user lookup, no Reddit, Mastodon or Bluesky, no full-text fetching of linked
+pages, no embeddings.
+
+## Phase 10: Dashboard
+- Next.js UI: review queue, run traces, performance, experiment and discovery views.
 - **Exit:** a non-technical user can review, approve and see results without the API.
 
-## Phase 10: Production deployment and observability
+## Phase 11: Production deployment and observability
 - Docker, GitHub Actions CI (lint, types, tests, evals), AWS deployment.
 - OpenTelemetry traces from `NodeEvent` instrumentation; alerting on failure rates.
 - Auth and multi-tenant accounts.

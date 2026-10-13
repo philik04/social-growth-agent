@@ -9,13 +9,21 @@ from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from social_growth_agent.discovery.text import jaccard, token_set
 from social_growth_agent.models import (
     ContentCandidate,
+    ContentIntent,
     CritiqueVerdict,
     HookType,
     PolicyViolation,
     PostFormat,
 )
+from social_growth_agent.policies.grounding import (
+    EvidenceGrounding,
+    unsupported_numbers,
+    unsupported_urls,
+)
+from social_growth_agent.policies.mentions import GROK_HANDLE, find_mentions
 
 DEFAULT_MAX_POST_LENGTH = 280
 
@@ -35,6 +43,17 @@ class ContentPolicy(BaseModel):
         description="Every candidate must DECLARE this hook type. The rule checks the "
         "declared label only; it cannot verify that the text really uses the hook.",
     )
+    # Discovery runs (Phase 9). Unset for every other run, so earlier runs and their
+    # checkpoints are unchanged.
+    content_intent: ContentIntent | None = None
+    grounding: EvidenceGrounding | None = Field(
+        default=None,
+        description="Links and numbers a post may use: those found in the run's evidence.",
+    )
+    recent_grok_questions: tuple[str, ...] = Field(
+        default=(), description="Grok questions drafted recently (no near-repeats)."
+    )
+    grok_similarity: float = Field(default=0.5, gt=0, le=1)
 
     @model_validator(mode="after")
     def _length_range(self) -> Self:
@@ -53,6 +72,17 @@ class ContentPolicy(BaseModel):
             payload["min_post_length"] = self.min_post_length
         if self.required_hook_type is not None:
             payload["required_hook_type"] = self.required_hook_type.value
+        if self.content_intent is not None:
+            payload["content_intent"] = self.content_intent.value
+            payload["mentions"] = (
+                "exactly one @grok, nothing else"
+                if self.content_intent is ContentIntent.GROK_QUESTION
+                else "none"
+            )
+        if self.grounding is not None:
+            links: list[JsonValue] = list(sorted(self.grounding.allowed_urls))
+            payload["allowed_links"] = links
+            payload["numbers"] = "only numbers that appear in the cited evidence"
         return payload
 
 
@@ -132,12 +162,92 @@ class RequiredHookRule:
         )
 
 
+class MentionRule:
+    """Phase 9: no @mentions, except exactly one ``@grok`` in a ``grok_question`` run.
+
+    Applies to every run, generated and human-edited content alike. Even an allowed
+    ``@grok`` post is manual-only: publishing refuses any mention (``policies.mentions``).
+    """
+
+    name = "mentions"
+
+    def check(self, candidate: ContentCandidate, policy: ContentPolicy) -> PolicyViolation | None:
+        mentions = find_mentions(candidate.content)
+        if policy.content_intent is not ContentIntent.GROK_QUESTION:
+            if not mentions:
+                return None
+            return PolicyViolation(
+                rule=self.name,
+                detail=f"mentions are not allowed here: {', '.join('@' + m for m in mentions)}",
+            )
+        if mentions != [GROK_HANDLE]:
+            shown = ", ".join("@" + m for m in mentions) or "none"
+            return PolicyViolation(
+                rule=self.name,
+                detail="a Grok question mentions exactly one account, @grok, once "
+                f"(found: {shown})",
+            )
+        return None
+
+
+class GrokQuestionRule:
+    """Phase 9 Grok criteria checked per candidate: it asks something, says why asking
+    Grok adds value (criterion 4) and is not a near-repeat of a recent Grok question
+    (criterion 5). No-op for every other intent."""
+
+    name = "grok_question"
+    MIN_RATIONALE = 20
+
+    def check(self, candidate: ContentCandidate, policy: ContentPolicy) -> PolicyViolation | None:
+        if policy.content_intent is not ContentIntent.GROK_QUESTION:
+            return None
+        if "?" not in candidate.content:
+            return PolicyViolation(rule=self.name, detail="a Grok question must ask a question")
+        if len(candidate.rationale.strip()) < self.MIN_RATIONALE:
+            return PolicyViolation(
+                rule=self.name, detail="missing the reason why asking Grok adds value"
+            )
+        mine = token_set(candidate.content)
+        for earlier in policy.recent_grok_questions:
+            overlap = jaccard(mine, token_set(earlier))
+            if overlap >= policy.grok_similarity:
+                return PolicyViolation(
+                    rule=self.name,
+                    detail=f"too similar to a recent Grok question ({overlap:.2f})",
+                )
+        return None
+
+
+class GroundingRule:
+    """Phase 9 discovery runs: links and numbers must come from the run's evidence."""
+
+    name = "evidence_grounding"
+
+    def check(self, candidate: ContentCandidate, policy: ContentPolicy) -> PolicyViolation | None:
+        grounding = policy.grounding
+        if grounding is None:
+            return None
+        urls = unsupported_urls(candidate.content, grounding)
+        numbers = unsupported_numbers(candidate.content, grounding)
+        if not urls and not numbers:
+            return None
+        parts = []
+        if urls:
+            parts.append(f"links not in the evidence: {', '.join(urls)}")
+        if numbers:
+            parts.append(f"numbers not in the evidence: {', '.join(numbers)}")
+        return PolicyViolation(rule=self.name, detail="; ".join(parts))
+
+
 DEFAULT_RULES: tuple[HardRule, ...] = (
     NonBlankContentRule(),
     MaxLengthRule(),
     AllowedFormatRule(),
     MinLengthRule(),
     RequiredHookRule(),
+    MentionRule(),
+    GrokQuestionRule(),
+    GroundingRule(),
 )
 
 

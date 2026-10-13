@@ -149,6 +149,30 @@ class AppSettings(BaseSettings):
         default="100,200", description="Comma-separated upper edges of the length buckets."
     )
 
+    # Content discovery (Phase 9)
+    discovery_registry_file: Path = Field(
+        default=Path("discovery.toml"), description="Source registry for discovery sessions."
+    )
+    discovery_sources: Literal["mock", "live"] = Field(
+        default="mock",
+        description="'mock' serves bundled fixtures; 'live' fetches feeds, GitHub and Hacker "
+        "News. X sources follow RESEARCH_PROVIDER. Never a silent fallback.",
+    )
+    discovery_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    discovery_x_retention_days: int = Field(
+        default=30, ge=1, le=365, description="X text in discovery items is purged after this."
+    )
+    x_account_user_id: str | None = Field(
+        default=None,
+        pattern=r"^[0-9]{1,19}$",
+        description="Numeric id of the account you post as; manual registrations must match.",
+    )
+    x_account_username: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9_]{1,15}$",
+        description="Handle (without @) of the account you post as, if the id is not set.",
+    )
+
     @model_validator(mode="after")
     def _strategy_review_is_safe(self) -> Self:
         if self.strategy_review_allow_unauthenticated and self.app_environment != "development":

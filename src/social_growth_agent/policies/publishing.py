@@ -16,6 +16,7 @@ from social_growth_agent.models import (
     RunStatus,
 )
 from social_growth_agent.policies.content_policy import ContentPolicy, find_violations
+from social_growth_agent.policies.mentions import MANUAL_ONLY_REASON, is_manual_only
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,9 @@ def publish_refusals(facts: PublishFacts) -> list[str]:
     """Every reason the candidate may not be published; empty means publishable."""
     reasons: list[str] = []
     cand = facts.candidate
+    if is_manual_only(cand.content):
+        # Phase 9: checked on the text, first, whatever the intent label or the policy.
+        reasons.append(MANUAL_ONLY_REASON)
     if facts.run_status is not RunStatus.APPROVED:
         reasons.append(f"run is {facts.run_status.value}, not approved")
     if facts.approval_count != 1 or facts.approved_candidate_id is None:

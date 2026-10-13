@@ -4,6 +4,7 @@ The only place that opens connections. ``Runtime.close()`` releases them.
 """
 
 import dataclasses
+from collections.abc import Callable
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -31,14 +32,18 @@ from social_growth_agent.providers import (
     SocialAnalyticsProvider,
     SocialPublisher,
 )
+from social_growth_agent.providers.discovery import LiveDiscoveryProviders, ProviderFactory
 from social_growth_agent.providers.factory import build_analytics_provider, build_publisher
+from social_growth_agent.providers.social import PostVerifier, SocialResearchProvider
 from social_growth_agent.services.analytics import AnalyticsSchedule, AnalyticsService
 from social_growth_agent.services.analytics_worker import AnalyticsWorker
+from social_growth_agent.services.discovery import DiscoveryConfig, DiscoveryService
 from social_growth_agent.services.evaluations import EvaluationDefaults, EvaluationService
 from social_growth_agent.services.experiments import ExperimentService
 from social_growth_agent.services.factory import build_dependencies
 from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.publisher import EmbeddedWorker, PublisherWorker
+from social_growth_agent.services.replay import EvidenceReplayProvider
 from social_growth_agent.services.review_auth import ReviewAuth
 from social_growth_agent.services.runs import RunService
 from social_growth_agent.services.strategies import StrategyService
@@ -62,6 +67,8 @@ class Runtime:
     strategies: StrategyService | None = None
     experiments: ExperimentService | None = None
     """Phase 8; always set by ``build_runtime``."""
+    discovery: DiscoveryService | None = None
+    """Phase 9; always set by ``build_runtime``."""
     review_auth: ReviewAuth = field(default_factory=ReviewAuth)
 
     def start_embedded_worker(self) -> None:
@@ -85,6 +92,8 @@ def build_runtime(
     retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
     publisher: SocialPublisher | None = None,
     strategy_llm: LLMProvider | None = None,
+    discovery_providers: ProviderFactory | None = None,
+    post_verifier: Callable[[], PostVerifier] | None = None,
 ) -> Runtime:
     """Raises ``ConfigurationError`` if DATABASE_URL, the price list or a configured
     provider is missing. Opening connections spends nothing; no run is started and
@@ -94,6 +103,7 @@ def build_runtime(
         raise ConfigurationError("DATABASE_URL is not set")
     prices = prices or load_price_list(settings.pricing_file)
     deps = deps or build_dependencies(settings)
+    research = deps.research_provider
     # before any connection opens, so a missing key leaks no pool
     agent = build_strategy_agent(settings, llm=strategy_llm)
     workers = settings.api_max_concurrent_runs
@@ -101,7 +111,12 @@ def build_runtime(
     pool = open_pool(db.libpq_url, max_size=workers + 2)
     workflow = WorkflowService(
         dataclasses.replace(
-            deps, usage_sink=UsageLedger(db), operation_ledger=OperationRecorder(db)
+            deps,
+            usage_sink=UsageLedger(db),
+            operation_ledger=OperationRecorder(db),
+            # Phase 9: runs started from an opportunity replay its stored evidence;
+            # every other query reaches the configured provider unchanged.
+            research_provider=EvidenceReplayProvider(research, db),
         ),
         checkpointer=postgres_checkpointer(pool),
         retry_policy=retry_policy,
@@ -126,6 +141,20 @@ def build_runtime(
         proposer=None if agent is None else Proposer(settings.strategy_proposer),
         stale_seconds=2 * settings.llm_timeout_seconds,
     )
+    discovery = DiscoveryService(
+        db,
+        runs=service,
+        prices=prices,
+        providers=discovery_providers or build_discovery_providers(settings, research),
+        config=DiscoveryConfig(
+            registry_path=settings.discovery_registry_file,
+            x_retention_days=settings.discovery_x_retention_days,
+            account_user_id=settings.x_account_user_id,
+            account_username=settings.x_account_username,
+        ),
+        verifier=post_verifier or (lambda: build_post_verifier(settings)),
+        analytics=schedule,
+    )
     worker = build_publisher_worker(settings, db, publisher=publisher)
     embedded = (
         EmbeddedWorker(worker, poll_seconds=settings.publisher_poll_seconds)
@@ -139,12 +168,43 @@ def build_runtime(
         evaluations=evaluations,
         strategies=strategies,
         experiments=experiments,
+        discovery=discovery,
         review_auth=ReviewAuth.from_settings(settings),
         db=db,
         pool=pool,
         executor=executor,
         worker=worker,
         embedded_worker=embedded,
+    )
+
+
+def build_discovery_providers(
+    settings: AppSettings, research: SocialResearchProvider
+) -> ProviderFactory:
+    """'mock' (default): the real provider classes over bundled fixtures, no network.
+    'live': feeds, GitHub and Hacker News over HTTPS. X sources use the configured
+    research provider when it is X, else synthetic X fixtures."""
+    from social_growth_agent.providers.mocks.discovery import MockDiscoveryProviders
+
+    x_research = research if settings.research_provider == "x" else None
+    if settings.discovery_sources == "mock":
+        return MockDiscoveryProviders(research=x_research)
+    if x_research is None:
+        x_research = MockDiscoveryProviders().research
+    return LiveDiscoveryProviders(x_research, timeout_seconds=settings.discovery_timeout_seconds)
+
+
+def build_post_verifier(settings: AppSettings) -> PostVerifier:
+    """Reads one post to verify a manual publication: X with the app-only bearer token
+    for ANALYTICS_PROVIDER=x, else the offline mock (which knows no real posts)."""
+    if settings.analytics_provider == "mock":
+        from social_growth_agent.providers.mocks import MockAnalyticsProvider
+
+        return MockAnalyticsProvider()
+    from social_growth_agent.providers.x import XAnalyticsProvider
+
+    return XAnalyticsProvider.from_token(
+        settings.x_bearer_token, timeout_seconds=settings.x_timeout_seconds
     )
 
 

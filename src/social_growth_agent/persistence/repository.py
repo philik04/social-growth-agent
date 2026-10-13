@@ -17,7 +17,7 @@ from social_growth_agent.accounting import (
     UsageCounts,
     estimate_cost,
 )
-from social_growth_agent.accounting.costs import ResearchUsage
+from social_growth_agent.accounting.costs import ResearchUsage, VerificationUsage
 from social_growth_agent.errors import RunNotFoundError
 from social_growth_agent.models import RunStatus
 from social_growth_agent.persistence import publications as pubs
@@ -28,6 +28,7 @@ from social_growth_agent.persistence.tables import (
     CritiqueRow,
     FindingEvidenceRow,
     LLMCallRow,
+    ManualPublicationRow,
     PricingVersionRow,
     ResearchBriefRow,
     ResearchFetchRow,
@@ -50,6 +51,7 @@ from social_growth_agent.persistence.views import (
     RunFailure,
     RunSummary,
 )
+from social_growth_agent.policies.mentions import is_manual_only
 
 ACTIVE_STATUSES = (RunStatus.QUEUED, RunStatus.RUNNING)
 
@@ -144,6 +146,7 @@ def summary(row: RunRow) -> RunSummary:
         created_at=row.created_at,
         updated_at=row.updated_at,
         failure=failure,
+        opportunity_id=row.opportunity_id,
     )
 
 
@@ -225,8 +228,24 @@ def usage_counts(session: Session, run_id: str) -> UsageCounts:
         .order_by(LLMCallRow.provider, LLMCallRow.model)
     )
     publishing = [
-        PublishUsage(provider=provider, attempts=attempts, posts_created=created)
-        for provider, attempts, created in pubs.publish_operation_counts(session, run_id)
+        PublishUsage(
+            provider=provider, attempts=attempts, posts_created=created, posts_with_url=urls
+        )
+        for provider, attempts, created, urls in pubs.publish_operation_counts(session, run_id)
+    ]
+    verification = [
+        VerificationUsage(provider=p, registrations=n, post_reads=reads, user_reads=users)
+        for p, n, reads, users in session.execute(
+            select(
+                ManualPublicationRow.verification_provider,
+                func.count(),
+                func.sum(ManualPublicationRow.verification_post_reads),
+                func.sum(ManualPublicationRow.verification_user_reads),
+            )
+            .where(ManualPublicationRow.run_id == run_id)
+            .group_by(ManualPublicationRow.verification_provider)
+            .order_by(ManualPublicationRow.verification_provider)
+        )
     ]
     analytics = [
         AnalyticsUsage(
@@ -242,6 +261,7 @@ def usage_counts(session: Session, run_id: str) -> UsageCounts:
         )
     ]
     return UsageCounts(
+        verification=verification,
         analytics=analytics,
         publishing=publishing,
         research=[
@@ -301,6 +321,8 @@ def candidate_views(
             revises_candidate_id=c.revises_candidate_id,
             research_finding_ids=sorted(findings[c.id]),
             critiques=critiques[c.id],
+            content_intent=c.content_intent,
+            manual_only=is_manual_only(c.content),
         )
         for c in candidates
     ]
@@ -392,6 +414,8 @@ def research_view(session: Session, run_id: str) -> ResearchView | None:
                 claim_type=f.claim_type,
                 signal_strength=f.signal_strength,
                 evidence_source_ids=evidence[f.id],
+                claim_kind=f.claim_kind,
+                verification=f.verification,
             )
             for f in findings
         ],

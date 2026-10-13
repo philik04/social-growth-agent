@@ -17,6 +17,7 @@ from social_growth_agent.models.base import DomainModel, new_id, utc_now
 from social_growth_agent.models.content import (
     CandidateOrigin,
     ContentCandidate,
+    ContentIntent,
     HookType,
     PostFormat,
 )
@@ -30,10 +31,17 @@ from social_growth_agent.models.critique import (
     RiskLevel,
     ToneMatch,
 )
+from social_growth_agent.models.discovery import (
+    ClaimKind,
+    EvidenceType,
+    SourceCategory,
+    VerificationStatus,
+)
 from social_growth_agent.models.insights import Experiment, ExperimentStatus, PerformanceInsight
 from social_growth_agent.models.publishing import (
     ACTIVE_PUBLICATION_STATUSES,
     AttemptOutcome,
+    PlatformPost,
     PostMetrics,
     PublicationStatus,
     PublishedPost,
@@ -84,9 +92,11 @@ __all__ = [
     "AttemptOutcome",
     "AttemptResult",
     "CandidateOrigin",
+    "ClaimKind",
     "ClaimType",
     "Confidence",
     "ContentCandidate",
+    "ContentIntent",
     "ContentOpportunity",
     "ContentStrategy",
     "Critique",
@@ -94,6 +104,7 @@ __all__ = [
     "CritiqueIssue",
     "CritiqueVerdict",
     "DomainModel",
+    "EvidenceType",
     "Experiment",
     "ExperimentStatus",
     "FetchOutcome",
@@ -106,6 +117,7 @@ __all__ = [
     "MetricsScope",
     "NodeEvent",
     "PerformanceInsight",
+    "PlatformPost",
     "PolicyViolation",
     "PostFormat",
     "PostMetricMiss",
@@ -137,9 +149,11 @@ __all__ = [
     "SearchResult",
     "SignalDecision",
     "SnapshotAge",
+    "SourceCategory",
     "SourcePost",
     "TokenUsage",
     "ToneMatch",
+    "VerificationStatus",
     "new_id",
     "utc_now",
 ]

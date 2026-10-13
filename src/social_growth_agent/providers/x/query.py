@@ -41,6 +41,11 @@ def effective_query(query: ResearchQuery) -> str:
         operators.append(f"lang:{query.language}")
     if query.author_username and "from:" not in lowered:
         operators.append(f"from:{query.author_username}")
+    elif query.authors and "from:" not in lowered:
+        # Phase 9 curated accounts: one request covers every handle (no per-user calls).
+        handles = list(dict.fromkeys(query.authors))
+        group = " OR ".join(f"from:{h}" for h in handles)
+        operators.append(f"({group})" if len(handles) > 1 else group)
     if query.exclude_reposts and "-is:retweet" not in lowered:
         operators.append("-is:retweet")
     return " ".join([base, *operators])

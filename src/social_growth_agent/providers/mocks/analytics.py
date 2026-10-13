@@ -9,6 +9,7 @@ from social_growth_agent.models import (
     AnalyticsFailureCategory,
     AnalyticsFetch,
     MetricsScope,
+    PlatformPost,
     PostMetricMiss,
     PostMetricRecord,
 )
@@ -39,6 +40,7 @@ class MockAnalyticsProvider:
         created_at: Mapping[str, datetime] | None = None,
         deleted: Iterable[str] = (),
         omit_impressions: bool = False,
+        posts: Iterable[PlatformPost] = (),
     ) -> None:
         self._script = list(script)
         self._created_at = dict(created_at or {})
@@ -46,6 +48,23 @@ class MockAnalyticsProvider:
         self._omit_impressions = omit_impressions
         self._lock = threading.Lock()
         self.calls: list[list[str]] = []
+        self._posts = {p.provider_post_id: p for p in posts}
+        self.lookups: list[str] = []
+
+    def add_post(self, post: PlatformPost) -> None:
+        """Make a (synthetic) post visible to ``lookup_post``, e.g. one a demo "posted"."""
+        with self._lock:
+            self._posts[post.provider_post_id] = post
+            if post.created_at is not None:
+                self._created_at[post.provider_post_id] = post.created_at
+
+    def lookup_post(self, post_id: str) -> PlatformPost | None:
+        """Only posts given in ``posts`` (or ``add_post``) exist; deleted ids do not."""
+        with self._lock:
+            self.lookups.append(post_id)
+            if post_id in self._deleted:
+                return None
+            return self._posts.get(post_id)
 
     def fetch_post_metrics(self, post_ids: Sequence[str]) -> AnalyticsFetch:
         with self._lock:

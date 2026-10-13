@@ -293,7 +293,7 @@ def test_0005_applies_to_a_populated_phase_6_database(base_database_url):
 
         upgrade(url)  # 0004 -> head (0005, 0006)
 
-        assert current_revision(url) == "0006"
+        assert current_revision(url) == "0007"
         assert sql(url, "SELECT strategy_version_ref FROM runs") == [(None,)]
         assert sql(url, "SELECT likes, impressions FROM post_metrics") == [(7, None)]
         for table in (
@@ -320,7 +320,7 @@ def test_0005_applies_to_a_populated_phase_6_database(base_database_url):
         command.downgrade(alembic_config(url), "0004")
         assert sql(url, "SELECT count(*) FROM post_metrics") == [(1,)]
         upgrade(url)
-        assert current_revision(url) == "0006"
+        assert current_revision(url) == "0007"
     finally:
         drop_scratch_database(base_database_url, url)
 

@@ -139,5 +139,7 @@ def _to_candidate(
         generation_attempt=ctx.attempt,
         strategy_id=ctx.strategy.id,
         strategy_version=ctx.strategy.version,
+        # Assigned by the application from the run's policy (Phase 9), never by the model.
+        content_intent=ctx.policy.content_intent,
         **draft.model_dump(),
     )

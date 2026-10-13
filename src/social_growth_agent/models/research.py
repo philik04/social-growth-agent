@@ -7,11 +7,17 @@ record. Interpretation (the Research Agent) turns posts into ``ResearchFinding``
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
 
 from pydantic import Field
 
 from social_growth_agent.models.base import DomainModel, new_id, utc_now
+from social_growth_agent.models.discovery import (
+    ClaimKind,
+    EvidenceType,
+    SourceCategory,
+    SourcePlatform,
+    VerificationStatus,
+)
 from social_growth_agent.models.run import ProviderErrorCategory
 
 
@@ -32,6 +38,16 @@ class ResearchQuery(DomainModel):
         default=None, ge=1, le=167, description="X recent search covers the last 7 days."
     )
     exclude_reposts: bool = True
+    authors: list[str] = Field(
+        default_factory=list,
+        max_length=25,
+        description="Several curated handles in one ``from:`` group (Phase 9 discovery).",
+    )
+    discovery_opportunity_id: str | None = Field(
+        default=None,
+        pattern=r"^opp_[0-9a-f]{12}$",
+        description="Phase 9: replay this opportunity's stored evidence instead of searching.",
+    )
 
 
 class SourcePost(DomainModel):
@@ -42,7 +58,7 @@ class SourcePost(DomainModel):
     """
 
     source_id: str = Field(min_length=1, description="Stable id used as evidence, e.g. x_123.")
-    platform: Literal["x"] = "x"
+    platform: SourcePlatform = "x"
     author_id: str
     author_username: str | None = None
     text: str
@@ -55,6 +71,13 @@ class SourcePost(DomainModel):
     impressions: int | None = Field(default=None, ge=0)
     query: str = Field(description="The original query that retrieved this post.")
     retrieved_at: datetime
+    # Phase 9: set for discovery evidence replayed into a run (None for X research).
+    url: str | None = None
+    title: str | None = None
+    publisher: str | None = None
+    source_category: SourceCategory | None = None
+    evidence_type: EvidenceType | None = None
+    verification_status: VerificationStatus | None = None
 
     def missing_metrics(self) -> list[str]:
         names = ("likes", "reposts", "replies", "quotes", "impressions")
@@ -103,6 +126,12 @@ class SearchResult(DomainModel):
 
     posts: list[SourcePost]
     fetch: ResearchFetch
+    source_name: str | None = Field(
+        default=None, description="Overrides the provider's name for this result (replay)."
+    )
+    synthetic: bool | None = Field(
+        default=None, description="Overrides the provider's synthetic flag for this result."
+    )
 
 
 class ClaimType(StrEnum):
@@ -121,6 +150,10 @@ class ResearchFinding(DomainModel):
     claim_type: ClaimType = ClaimType.OBSERVATION
     evidence_source_ids: list[str] = Field(min_length=1)
     signal_strength: float = Field(ge=0.0, le=1.0)
+    # Phase 9 (discovery runs only): the kind of statement, validated against the cited
+    # evidence, and what that evidence establishes. None for every other run.
+    claim_kind: ClaimKind | None = None
+    verification: VerificationStatus | None = None
 
 
 class Confidence(StrEnum):

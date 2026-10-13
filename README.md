@@ -3,7 +3,17 @@
 An agentic orchestration system that grows a creator's or founder's presence on X by running a
 closed loop: **research → generate → critique → human approval → publish → analyze → update strategy**.
 
-> Status: **Phase 8, experiments.** Pre-registered A/B experiments randomize each new run
+> Status: **Phase 9, content discovery.** On-demand, bounded discovery sessions read
+> official feeds, arXiv, GitHub releases, Hacker News and X search with provenance, and
+> rank topics deterministically with their reasons; an audience shortlist suggests where to
+> read, never what to automate. A chosen topic starts a normal run that replays the stored
+> evidence. Facts are attributed, corroboration means the same claim in two independent
+> primary sources, and any `@mention`, including the occasional `@grok` question, is
+> manual-only: you export it, post it yourself and register the post so it is measured.
+> Deleted and expired third-party text is purged everywhere
+> ([docs/CONTENT_DISCOVERY.md](docs/CONTENT_DISCOVERY.md), [docs/API.md](docs/API.md)).
+>
+> Phase 8: pre-registered A/B experiments randomize each new run
 > to one hook type or length range (permuted blocks, enforced as a hard content rule) and
 > compare the published posts at one age-matched snapshot with a bootstrap interval. Outcomes
 > stay masked until the experiment concludes; looking early is an explicit, irreversible
@@ -209,6 +219,27 @@ Every write needs `STRATEGY_REVIEW_TOKEN`, because a run can call the LLM and X.
 pause for human review and publish only on request; conclusion and adoption are explicit.
 Plan for months at personal-account volume. See [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
 
+### Finding topics (content discovery)
+
+```bash
+# discovery to a reviewed draft, one manual-only @grok question exported and registered,
+# then a deletion request; fixtures, fake agents, mock verifier: nothing posted, free
+DATABASE_URL=postgresql://sga@localhost:5433/sga_scratch \
+  uv run python -m social_growth_agent.services.discovery_demo
+
+uv run sga-discovery plan --account acct_1           # planned calls and max X read cost
+SGA_REVIEW_TOKEN=$STRATEGY_REVIEW_TOKEN uv run sga-discovery run --account acct_1 --by me
+uv run sga-discovery opportunities $SESSION           # ranked, with reasons and intents
+curl -s -XPOST localhost:8000/discovery/opportunities/$OPP/runs \
+  -H "Authorization: Bearer $STRATEGY_REVIEW_TOKEN" -H 'content-type: application/json' \
+  -d '{"account": {...}, "intent": "news_commentary", "reviewer": "me"}'
+uv run sga-discovery purge-expired                    # daily: X text past its retention
+```
+
+Sessions use bundled fixtures until `DISCOVERY_SOURCES=live`. Mentions are never posted by
+the system; set `X_ACCOUNT_USER_ID` to register posts you published by hand. See
+[docs/CONTENT_DISCOVERY.md](docs/CONTENT_DISCOVERY.md).
+
 ### Live publishing (opt-in, creates ONE real post)
 
 ```bash
@@ -291,19 +322,21 @@ run = service.submit_review(run.state.run_id, decision)  # approve / reject / ed
 src/social_growth_agent/
   config.py       settings from env / .env
   models/         domain objects (Pydantic, immutable)
-  policies/       content policy (hard rules), critic gate, human edit policy, research + publish rules, strategy changes
+  discovery/      source registry, feed parsing, clustering, ranking, claims, audience (pure, deterministic)
+  policies/       content policy (hard rules incl. mentions, @grok, grounding), critic gate, human edit policy, research + publish rules, strategy changes
   graph/          state, nodes, pure routing, builder, checkpoint serialization
   agents/         research, content, critic, strategy (+ evidence digest), prompts/*.md, deterministic fakes
-  providers/      LLM + social-platform protocols, OpenAI adapter, x/ (research, publishing, analytics), mocks/
-  services/       WorkflowService, RunService, PublicationService, PublisherWorker, AnalyticsWorker, Evaluation/StrategyService, ExperimentService + synthetic seed, review auth, runtime, demos
-  persistence/    SQLAlchemy tables, Alembic migrations, recorder, ledgers, publications, analytics, lineage, evaluations, strategies, experiments, checkpointer, sga-db
+  providers/      LLM + social-platform protocols, OpenAI adapter, x/ (research, publishing, analytics, post lookup), discovery sources (feeds, GitHub, HN, X), mocks/
+  services/       WorkflowService, RunService, PublicationService, PublisherWorker, AnalyticsWorker, Evaluation/StrategyService, ExperimentService + synthetic seed, DiscoveryService + evidence replay + sga-discovery, review auth, runtime, demos
+  persistence/    SQLAlchemy tables, Alembic migrations, recorder, ledgers, publications, analytics, lineage, evaluations, strategies, experiments, discovery, retention, checkpointer, sga-db
   analytics/      observed derived metrics, strategy evaluations and experiment analysis (pure, deterministic)
   accounting/     price list (pricing.toml) and cost estimates
-  api/            FastAPI app: run, review, resume, usage, publication, analytics, evaluation, strategy and experiment endpoints
+  api/            FastAPI app: run, review, resume, usage, publication, analytics, evaluation, strategy, experiment and discovery endpoints
   evaluation/     critic evaluation harness
   observability/  structured logging, timing
 tests/
-docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ANALYTICS.md, STRATEGY_EVALUATION.md, EXPERIMENTS.md, ROADMAP.md
+docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ANALYTICS.md, STRATEGY_EVALUATION.md, EXPERIMENTS.md, CONTENT_DISCOVERY.md, API.md, ROADMAP.md
+discovery.toml    content discovery source registry (sources, vocabulary, weights, windows)
 pricing.toml      prices for cost estimates (blank by default; never in code)
 docker-compose.yml  local PostgreSQL only
 ```

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13",
+    "defusedxml>=0.7",
     "fastapi>=0.115",
     "httpx>=0.27",
     "langgraph>=1.0",
@@ -24,12 +25,14 @@ sga-db = "social_growth_agent.persistence.cli:main"
 sga-publisher-worker = "social_growth_agent.services.publisher_cli:main"
 sga-analytics-worker = "social_growth_agent.services.analytics_cli:main"
 sga-strategy = "social_growth_agent.services.strategy_cli:main"
+sga-discovery = "social_growth_agent.services.discovery_cli:main"
 
 [dependency-groups]
 dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "ruff>=0.8",
+    "types-defusedxml>=0.7",
 ]
 
 [build-system]

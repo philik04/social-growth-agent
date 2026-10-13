@@ -17,8 +17,10 @@ from social_growth_agent.agents.critic import CandidateEvaluation, CriticReport,
 from social_growth_agent.agents.research import FindingDraft, OpportunityDraft, ResearchReport
 from social_growth_agent.agents.strategy import ChangeDraft, StrategyProposalDraft
 from social_growth_agent.models import (
+    ClaimKind,
     ClaimType,
     Confidence,
+    ContentIntent,
     CritiqueVerdict,
     HookType,
     IssueCategory,
@@ -47,6 +49,9 @@ def fake_research(request: LLMRequest) -> ResearchReport:
     raw_pillars = request.payload.get("pillars", [])
     pillars = [str(p) for p in raw_pillars] if isinstance(raw_pillars, list) else []
     fallback = str(request.payload.get("query", "supplied posts"))
+    posts = payload_list(request, "posts")
+    if any("source_category" in p for p in posts):
+        return _fake_discovery_research(posts, pillars, fallback)
     by_theme: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for post in payload_list(request, "posts"):
         theme = next((p for p in pillars if mentions(str(post["text"]), p)), fallback)
@@ -85,6 +90,63 @@ def fake_research(request: LLMRequest) -> ResearchReport:
     )
 
 
+def _fake_discovery_research(
+    posts: list[dict[str, Any]], pillars: list[str], fallback: str
+) -> ResearchReport:
+    """Discovery evidence (Phase 9): labels claim kinds the way the prompt asks. Primary
+    items become reported facts (their title is the claim, so anchors match), questions
+    in discussions become open questions, other discussion becomes opinion."""
+    groups: dict[ClaimKind, list[dict[str, Any]]] = defaultdict(list)
+    for post in posts:
+        body = f"{post.get('title') or ''} {post['text']}"
+        if post.get("source_category") == "primary":
+            groups[ClaimKind.REPORTED_FACT].append(post)
+        elif "?" in body:
+            groups[ClaimKind.OPEN_QUESTION].append(post)
+        else:
+            groups[ClaimKind.OPINION].append(post)
+    findings = []
+    for kind in (ClaimKind.REPORTED_FACT, ClaimKind.OPEN_QUESTION, ClaimKind.OPINION):
+        cited = groups.get(kind, [])
+        if not cited:
+            continue
+        first = cited[0]
+        body = f"{first.get('title') or ''} {first['text']}"
+        theme = next((p for p in pillars if mentions(body, p)), fallback)
+        summary = {
+            ClaimKind.REPORTED_FACT: f"{first.get('publisher') or 'A primary source'} "
+            f"reported: {str(first.get('title') or first['text'])[:160]}",
+            ClaimKind.OPEN_QUESTION: f"Practitioners are asking about {theme}; the evidence "
+            "does not settle it.",
+            ClaimKind.OPINION: f"Practitioners shared views on {theme}.",
+        }[kind]
+        findings.append(
+            FindingDraft(
+                theme=theme,
+                summary=summary,
+                claim_type=ClaimType.OBSERVATION,
+                evidence_source_ids=[str(p["source_id"]) for p in cited],
+                signal_strength=min(1.0, 0.3 + 0.2 * len(cited)),
+                claim_kind=kind,
+            )
+        )
+    return ResearchReport(
+        topic=", ".join(dict.fromkeys(f.theme for f in findings)),
+        summary=f"{len(findings)} kinds of claims in the supplied evidence.",
+        findings=findings,
+        content_opportunities=[
+            OpportunityDraft(
+                angle=f"Explain {f.theme}",
+                rationale="Grounded in the evidence.",
+                finding_indexes=[i],
+            )
+            for i, f in enumerate(findings)
+        ],
+        confidence=Confidence.MEDIUM if len(findings) > 1 else Confidence.LOW,
+        limitations=["Small set of discovery evidence; claim kinds are model labels, checked."],
+    )
+
+
 def _metric(post: dict[str, Any], name: str) -> int:
     value = post.get(name)
     return int(value) if isinstance(value, int) else 0
@@ -98,6 +160,12 @@ def fake_content(request: LLMRequest) -> CandidateBatch:
     audience = str(_dict(request, "strategy").get("target_audience", "builders"))
     raw_notes = request.payload.get("reviewer_notes", [])
     notes = [str(n) for n in raw_notes] if isinstance(raw_notes, list) else []
+    policy = _dict(request, "policy")
+    intent = policy.get("content_intent")
+    if intent is not None:
+        return _fake_intent_content(
+            ContentIntent(str(intent)), findings, policy, attempt, count, audience, previous
+        )
     drafts = []
     for i in range(count):
         finding = findings[i % len(findings)]
@@ -120,6 +188,70 @@ def fake_content(request: LLMRequest) -> CandidateBatch:
                 target_audience=audience,
                 research_finding_ids=[str(finding["id"])],
                 rationale=f"Builds on the strongest theme: {theme}.",
+                revises_candidate_id=revises,
+            )
+        )
+    return CandidateBatch(candidates=drafts)
+
+
+_INTENT_OPENERS = {
+    ContentIntent.ORIGINAL_INSIGHT: "One pattern worth noticing in {theme}: ",
+    ContentIntent.TECHNICAL_EXPLANATION: "How {theme} works, briefly: ",
+    ContentIntent.NEWS_COMMENTARY: "News on {theme}. ",
+    ContentIntent.RESEARCH_SUMMARY: "Research summary on {theme}: ",
+    ContentIntent.OPEN_QUESTION: "An open question on {theme}: ",
+}
+
+
+def _fake_intent_content(
+    intent: ContentIntent,
+    findings: list[dict[str, Any]],
+    policy: dict[str, Any],
+    attempt: int,
+    count: int,
+    audience: str,
+    previous: list[dict[str, Any]],
+) -> CandidateBatch:
+    """Discovery runs (Phase 9): text shaped by the content intent, using only the links
+    the policy allows and no numbers of its own. A Grok question mentions @grok once and
+    says why asking adds value; every other intent mentions nobody."""
+    links = [str(u) for u in policy.get("allowed_links", [])]
+    question_findings = [
+        f for f in findings if f.get("claim_kind") in ("open_question", "disputed")
+    ]
+    drafts = []
+    for i in range(count):
+        pool = question_findings if intent is ContentIntent.GROK_QUESTION else findings
+        finding = (pool or findings)[i % len(pool or findings)]
+        theme = str(finding["theme"])
+        if intent is ContentIntent.GROK_QUESTION:
+            content = (
+                f"@grok an open question on {theme}: what public evidence bears on it, "
+                "and what is still unknown?"
+            )
+            rationale = (
+                "The evidence leaves this open; asking Grok publicly invites a sourced "
+                "summary of both sides that readers can check."
+            )
+        else:
+            opener = _INTENT_OPENERS[intent].format(theme=theme)
+            claim = "It is guaranteed to change everything." if attempt == 1 else ""
+            content = f"{opener}{str(finding['summary'])[:150]} {claim}".strip()
+            if links and intent in (ContentIntent.NEWS_COMMENTARY, ContentIntent.RESEARCH_SUMMARY):
+                content = f"{content} Source: {links[0]}"
+            rationale = f"Grounded in the {finding.get('claim_kind') or 'supplied'} finding."
+        revises = str(previous[i]["candidate_id"]) if i < len(previous) else None
+        drafts.append(
+            CandidateDraft(
+                content=content[: int(str(policy.get("max_post_length", 280)))],
+                topic=theme,
+                hook_type=HookType.QUESTION
+                if intent in (ContentIntent.GROK_QUESTION, ContentIntent.OPEN_QUESTION)
+                else HookType.HOW_TO,
+                format=PostFormat.SINGLE,
+                target_audience=audience,
+                research_finding_ids=[str(finding["id"])],
+                rationale=rationale,
                 revises_candidate_id=revises,
             )
         )

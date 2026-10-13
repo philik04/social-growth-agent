@@ -157,6 +157,8 @@ def make_runtime(clean_db: str) -> Iterator[Callable[..., Runtime]]:
         agent_settings: AgentSettings | None = None,
         url: str | None = None,
         publisher=None,
+        discovery_providers=None,
+        post_verifier=None,
         **overrides,
     ) -> Runtime:
         settings = AppSettings(
@@ -177,6 +179,8 @@ def make_runtime(clean_db: str) -> Iterator[Callable[..., Runtime]]:
             prices=prices,
             retry_policy=FAST_RETRY,
             publisher=publisher or MockPublisher(),
+            discovery_providers=discovery_providers,
+            post_verifier=post_verifier,
         )
         created.append(runtime)
         return runtime

@@ -14,6 +14,7 @@ from social_growth_agent.errors import (
     CandidateNotFoundError,
     InvalidRunStateError,
     InvalidScheduleError,
+    ManualOnlyError,
     NotPublishableError,
     PublicationExistsError,
 )
@@ -24,6 +25,7 @@ from social_growth_agent.models import (
 )
 from social_growth_agent.observability import get_logger
 from social_growth_agent.persistence import Database
+from social_growth_agent.persistence import discovery as ddb
 from social_growth_agent.persistence import publications as pubs
 from social_growth_agent.persistence import repository as repo
 from social_growth_agent.persistence.tables import ContentCandidateRow, PublicationRow
@@ -36,6 +38,7 @@ from social_growth_agent.policies import (
     publish_refusals,
     schedule_refusal,
 )
+from social_growth_agent.policies.mentions import MANUAL_ONLY_REASON
 
 if TYPE_CHECKING:
     from social_growth_agent.services.analytics import AnalyticsSchedule
@@ -102,8 +105,14 @@ class PublicationService:
                 for r in publish_refusals(facts)
                 if not r.startswith("a publication already exists")
             ]
-            if refusals:
-                raise NotPublishableError("; ".join(refusals))
+            _raise_refusals(refusals)
+            if ddb.has_export(session, run_id, candidate_id):
+                # Phase 9: handed to a person to post by hand; publishing it by API as
+                # well would post it twice. Register the manual post instead.
+                raise NotPublishableError(
+                    "this candidate was exported for manual publication; register the "
+                    "post instead of publishing it"
+                )
             due = is_due(scheduled_for, now)
             status = PublicationStatus.READY if due else PublicationStatus.SCHEDULED
             if existing is not None:
@@ -293,8 +302,15 @@ class PublicationService:
         ]
         if content_sha256(candidate.content) != row.content_sha256:
             refusals.append("the candidate's content changed since the intent was created")
-        if refusals:
-            raise NotPublishableError("; ".join(refusals))
+        _raise_refusals(refusals)
+
+
+def _raise_refusals(refusals: list[str]) -> None:
+    """A mention makes the whole request manual-only (its own error and category)."""
+    if MANUAL_ONLY_REASON in refusals:
+        raise ManualOnlyError("; ".join(refusals))
+    if refusals:
+        raise NotPublishableError("; ".join(refusals))
 
 
 def _exists(row: PublicationRow) -> PublicationExistsError:

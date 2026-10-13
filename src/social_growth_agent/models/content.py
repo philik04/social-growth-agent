@@ -21,6 +21,19 @@ class PostFormat(StrEnum):
     THREAD = "thread"
 
 
+class ContentIntent(StrEnum):
+    """Editorial intent of a post (Phase 9). Independent of ``HookType``: the hook is how a
+    post opens (and what experiments vary); the intent is what the post is for. A
+    ``grok_question`` can open with a question or a contrarian hook, for example."""
+
+    ORIGINAL_INSIGHT = "original_insight"
+    TECHNICAL_EXPLANATION = "technical_explanation"
+    NEWS_COMMENTARY = "news_commentary"
+    RESEARCH_SUMMARY = "research_summary"
+    OPEN_QUESTION = "open_question"
+    GROK_QUESTION = "grok_question"
+
+
 class CandidateOrigin(StrEnum):
     GENERATED = "generated"
     HUMAN_EDIT = "human_edit"
@@ -48,3 +61,8 @@ class ContentCandidate(DomainModel):
     origin: CandidateOrigin = CandidateOrigin.GENERATED
     revises_candidate_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
+    content_intent: ContentIntent | None = Field(
+        default=None,
+        description="Set by the application from the run's policy (Phase 9 discovery runs); "
+        "None for every other run.",
+    )

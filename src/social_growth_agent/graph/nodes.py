@@ -26,6 +26,7 @@ from social_growth_agent.models import (
     ReviewStatus,
     RunError,
     RunStatus,
+    SearchResult,
     SignalDecision,
     SourcePost,
 )
@@ -98,7 +99,7 @@ class WorkflowNodes:
         if decision is SignalDecision.BROADEN:
             update["broaden_step"] = state.broaden_step + 1
         if posts:
-            update["research_source"] = self._source(state, posts, steps, result.fetch)
+            update["research_source"] = self._source(state, posts, steps, result)
         return update
 
     def _original_query(self, state: GraphState) -> ResearchQuery:
@@ -118,16 +119,20 @@ class WorkflowNodes:
         state: GraphState,
         posts: list[SourcePost],
         steps: list[ResearchQuery],
-        fetch: ResearchFetch,
+        result: SearchResult,
     ) -> ResearchSource:
         first = next(
-            (f for f in state.research_fetches if f.outcome is not FetchOutcome.ERROR), fetch
+            (f for f in state.research_fetches if f.outcome is not FetchOutcome.ERROR),
+            result.fetch,
         )
+        provider = self._research_provider
+        # A replayed discovery result names its own source (Phase 9); otherwise the
+        # provider's name and synthetic flag apply, as before.
         used_steps = steps[1 : state.broaden_step + 1]
         return ResearchSource(
-            provider=self._research_provider.source_name,
+            provider=result.source_name or provider.source_name,
             source_ids=[p.source_id for p in posts],
-            synthetic=self._research_provider.synthetic,
+            synthetic=provider.synthetic if result.synthetic is None else result.synthetic,
             query=steps[0].text,
             effective_query=first.effective_query,
             retrieved_at=first.started_at,
@@ -139,7 +144,11 @@ class WorkflowNodes:
         if state.research_source is None:
             raise InsufficientSignalError("no research material was retrieved")
         result = self._research.run(
-            state.account, state.strategy, state.source_posts, state.research_source
+            state.account,
+            state.strategy,
+            state.source_posts,
+            state.research_source,
+            intent=state.config.content_policy.content_intent,
         )
         return {
             "research": result.findings,

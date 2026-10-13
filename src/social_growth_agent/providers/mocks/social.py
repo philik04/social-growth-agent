@@ -18,6 +18,7 @@ from social_growth_agent.models import (
     SearchResult,
     SourcePost,
 )
+from social_growth_agent.policies.mentions import MANUAL_ONLY_REASON, is_manual_only
 from social_growth_agent.providers.mocks.fixtures import FIXTURE_POSTS
 
 _DEFAULT_LIMIT = 20
@@ -109,6 +110,12 @@ class MockPublisher:
         self.published: list[PublishResult] = []
 
     def publish(self, request: PublishRequest) -> PublishResult:
+        # Phase 9, last line of defence: a mention is never sent, whoever called this.
+        if is_manual_only(request.content):
+            raise PublishRejectedError(
+                f"not sent: {MANUAL_ONLY_REASON}",
+                failure_category=PublishFailureCategory.MANUAL_ONLY,
+            )
         with self._lock:
             self.calls.append(request)
             step = self._script.pop(0) if self._script else None

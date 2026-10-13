@@ -310,3 +310,33 @@ class ExperimentStateError(InvalidRunStateError):
 class AdoptionRefusedError(ExperimentStateError):
     """The result is not eligible for adoption: not a confirmatory ``favours_variant``,
     synthetic, or the base strategy is no longer active (HTTP 409)."""
+
+
+# --- content discovery (Phase 9) ---------------------------------------------------------
+
+
+class ManualOnlyError(NotPublishableError):
+    """The text contains an @mention: it may only be posted by a person, by hand (HTTP 409).
+    Automated publishing refuses it at every step; use the export endpoint instead."""
+
+
+class DiscoveryNotFoundError(ResourceNotFoundError):
+    pass
+
+
+class InvalidDiscoveryRequestError(SocialGrowthError):
+    """A discovery request names unknown sources or an invalid intent (HTTP 422)."""
+
+
+class DiscoveryStateError(InvalidRunStateError):
+    """The opportunity or candidate is not in a state that allows the operation (HTTP 409)."""
+
+
+class ManualPublicationError(InvalidRunStateError):
+    """A manual-publication registration was refused: not exported, not approved, not the
+    configured account's post, or the text does not match (HTTP 409)."""
+
+
+class ManualPublicationNotConfiguredError(SocialGrowthError):
+    """Manual registration needs the configured account (X_ACCOUNT_USER_ID or
+    X_ACCOUNT_USERNAME) and a post lookup provider (HTTP 503)."""

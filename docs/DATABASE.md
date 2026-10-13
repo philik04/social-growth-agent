@@ -34,7 +34,7 @@ Checkpoints use the allowlisted serializer from Phase 1: only our own domain and
 can be deserialized. Domain rows are immutable records keyed by their ids and inserted with
 `ON CONFLICT DO NOTHING`, so the same state can be projected any number of times.
 
-## Schema (revision 0006)
+## Schema (revision 0007)
 
 All child tables reference `runs.id` with `ON DELETE CASCADE`.
 
@@ -73,11 +73,24 @@ All child tables reference `runs.id` with `ON DELETE CASCADE`.
 | `experiment_events` (0006) | `id`, `experiment_id`, `kind`, `actor`, `auth_method`, `reason`, `detail`, `created_at` | Audit trail of lifecycle actions, including unblinding; append-only |
 | `experiment_results` (0006) | `id`, `experiment_id` UNIQUE, `verdict`, `evidence_class`, `peeked`, `cutoff`, `analysis_version`, `input_digest`, `digest`, `analysis` (JSONB), `flags`, `concluded_by`, `auth_method` | One immutable result per experiment; append-only |
 | `strategy_versions.source_experiment_result_id` (0006) | FK → `experiment_results`, UNIQUE, NULL except origin `experiment` | A result is adopted at most once |
+| `discovery_sessions` (0007) | `id`, `account_id`, `status` (`running`, `succeeded`, `partial`, `failed`), `synthetic`, `request`, `limits`, `registry_version`, `registry_sha256`, `strategy_version_id`, `pricing_id`, `requested_by`, `auth_method`, `summary`, `error_message`, timing | One bounded discovery sweep |
+| `discovery_fetches` (0007) | `id`, `session_id`, `source_id`, `kind`, `provider`, `outcome`, sanitized `request`, `requests_made`, `items_returned`, `post_reads`, `user_reads`, `http_status`, `error_category`, `error_message`, rate-limit fields, `etag`, `last_modified`, `latency_ms`, timing | Started/finished ledger per source call (also `cached`, `not_modified`, `skipped`); no response bodies |
+| `discovery_items` (0007) | `id`, `item_key` UNIQUE, `source_id`, `platform`, `kind`, `category`, `evidence_type`, `tier`, `verification_status`, `publisher`, `provider_item_id`, `canonical_url`, `title`, `text`, `author`, `author_id`, `published_at`, `first_retrieved_at`, `last_retrieved_at`, `keywords`, `claim_hints`, `metrics`, `content_sha256`, `evergreen`, `synthetic`, `first_session_id`, `purged_at`, `purge_reason` | One row per unique external item. Trigger `trg_discovery_items_guard`: no delete, fixed identity, purged text can never be restored |
+| `discovery_item_sightings` (0007) | `session_id`, `item_id`, `fetch_id`, `position`, `seen_at` | Which session and fetch saw an item; keeps sessions reproducible while items dedupe; append-only |
+| `discovery_opportunities` (0007) | `id`, `session_id`, `account_id`, `fingerprint`, `rank`, `score`, `keywords`, `headline`, `components`, `reasons`, `claim_hints`, `claim_summary`, `suggested_intents`, `grok`, `grok_eligible`, `audience_entry_ids`, `synthetic`, `status` (`open`, `used`, `dismissed`), `expires_at`, dismissal fields | Trigger: only `status` and the dismissal fields may change; no delete |
+| `opportunity_evidence` (0007) | `opportunity_id`, `item_id`, `role` (`primary` \| `discussion`), `position` | Append-only |
+| `audience_entries` (0007) | `id`, `session_id`, `kind` (`account` \| `discussion`), `ref`, `platform`, `score`, `signals`, `matched_topics`, `explanation`, `evidence_item_ids`, `curated`, `position` | Read-only suggestions; no bios, no sensitive fields; append-only |
+| `manual_exports` (0007) | `id`, `run_id`, `candidate_id`, `content_sha256`, `content_intent`, `manual_only`, `exported_by`, `auth_method`, `created_at` | A candidate handed to a person to post; append-only |
+| `manual_publications` (0007) | `id`, `publication_id` UNIQUE, `export_id`, `run_id`, `candidate_id`, `platform`, `provider_post_id`, UNIQUE (`platform`, `provider_post_id`), `author_id`, `author_username`, `provider_created_at`, `text_match`, `verification_provider`, `verification_post_reads`, `verification_user_reads`, `registered_by`, `auth_method` | A post published by hand, verified and linked to its `publications` row (`provider = 'manual'`); append-only |
+| `content_purges` (0007) | `id`, UNIQUE (`platform`, `provider_item_id`), `reason` (`deletion_request` \| `retention`), `requested_by`, `auth_method`, `counts` | Tombstones: a purged item is never stored or replayed again; append-only |
+| `runs.opportunity_id`, `content_candidates.content_intent`, `research_findings.claim_kind` / `verification` (0007) | nullable | NULL for rows before Phase 9 |
 | `post_metrics` (0004) | `id`, `job_id` UNIQUE, UNIQUE (`publication_id`, `snapshot_age`), `request_id`, `platform`, `provider`, `metrics_scope`, `provider_post_id`, `snapshot_age`, `target_age_seconds`, `scheduled_for`, `captured_at`, `provider_created_at`, `recorded_published_at`, `likes`, `reposts`, `replies`, `quotes`, `bookmarks`, `impressions` | Immutable observations. A count is NULL when the platform did not return it, 0 only when it returned 0. No raw provider JSON |
 
 The provenance chain is a plain join:
 `content_candidates → critiques`, `content_candidates → candidate_findings → research_findings
 → finding_evidence → source_posts`, `review_decisions → content_candidates`, and
+`runs → discovery_opportunities → opportunity_evidence → discovery_items` (Phase 9; a
+replayed `source_posts.source_id` is the item id), `manual_publications → publications`, and
 `publications → content_candidates` (through a composite FK, so a publication's candidate
 always belongs to its run), and `post_metrics → analytics_jobs → publications`.
 `GET /publications/{id}/lineage` assembles the whole chain (see [ANALYTICS.md](ANALYTICS.md)).
@@ -107,6 +120,17 @@ events and results reuse `sga_reject_mutation`; a new function `sga_freeze_exper
 protects the pre-registered columns of `experiments`. It starts no experiment and changes no
 existing run. Downgrading `0006` fails while a version with origin `experiment` exists,
 because the narrowed origin check would reject it; such versions must be handled by hand.
+
+`0007` adds the ten discovery tables above, the four nullable columns and a non-unique
+index `ix_publications_provider_post` on (`platform`, `provider_post_id`) for the
+registration lookup (mock publishers of earlier phases may share ids, so uniqueness of a
+manually registered post comes from `uq_manual_publications_post` and a locked lookup).
+Sightings, evidence links, audience entries, exports, registrations and purge tombstones
+reuse `sga_reject_mutation`; two new functions guard items and opportunities. It creates
+no session, run or job, and changes no existing row; a DB test upgrades a populated `0006`
+database and downgrades it again. Retention never deletes rows: it nulls item text,
+replaces run evidence text with a placeholder, rewrites the affected LangGraph checkpoint
+values in place and records a tombstone (see [CONTENT_DISCOVERY.md](CONTENT_DISCOVERY.md)).
 
 ## Resume
 

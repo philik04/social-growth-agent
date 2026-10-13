@@ -44,3 +44,5 @@ jobs:
         run: uv run python -m social_growth_agent.services.publish_demo
       - name: The publisher worker publishes nothing when nothing was requested
         run: uv run sga-publisher-worker --once && uv run sga-publisher-worker --dry-run
+      - name: Discovery demo (offline; fixtures, fake agents, mock verifier)
+        run: uv run python -m social_growth_agent.services.discovery_demo

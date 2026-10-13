@@ -29,3 +29,19 @@ Return a CandidateBatch with one entry per candidate:
 - When `reviewer_notes` are present, a human reviewer rejected the previous candidates and asked for changes (for example "shorter", "more technical", "less promotional"). Follow every note unless it conflicts with the content policy or the strategy's topics to avoid; the policy and the avoided topics always win.
 - When the policy sets `required_hook_type` or `min_post_length`, the run is part of an experiment: these are hard rules, enforced by the application like the maximum length. Every candidate must declare exactly `required_hook_type` as its `hook_type` and genuinely open with that kind of hook, and its length must lie between `min_post_length` and `max_post_length`. Reviewer notes and strategy preferences never override them.
 - `preferred_hooks` and `length_guidance` are soft preferences: favour them, but never exceed the content policy's maximum length, and reviewer notes take precedence over them.
+
+# Content intents and mentions (Phase 9)
+When the policy sets `content_intent`, every candidate serves that intent; the application records it, you do not choose it:
+- `original_insight`: your own observation built on the findings, labelled as a view.
+- `technical_explanation`: explain how something works, plainly and accurately.
+- `news_commentary`: what happened, attributed to the source, then why it matters to the audience.
+- `research_summary`: what a paper or report states, attributed, with its limits.
+- `open_question`: a genuine question the evidence leaves open, addressed to readers.
+- `grok_question`: a public question to @grok (see below).
+Rules:
+- Mentions: when `mentions` is `none` (and whenever no intent is set), never write an @mention of any account. Only for `grok_question` write exactly one `@grok`, and no other mention.
+- Any post with an @mention is published by a person, by hand; it is never sent automatically. Do not write replies to other accounts.
+- A Grok question asks something specific that the findings leave open, is useful to readers even if Grok never answers, and does not bait engagement. Do not assume Grok will reply or that mentioning it helps reach. Your `rationale` must say why asking Grok adds value (at least one full sentence).
+- Never manufacture controversy: do not say people disagree unless a finding is `disputed`, and represent each side fairly. No personal attacks.
+- Distinguish claim kinds in the text: attribute `reported_fact` findings to their publisher, label opinions and predictions as such, and do not present an `unverified_claim` as fact.
+- `allowed_links`: the only links you may include. `numbers`: use only numbers that appear in the cited evidence. Both are enforced by the application.

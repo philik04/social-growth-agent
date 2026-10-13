@@ -32,3 +32,4 @@ Return a CriticReport with exactly one evaluation per candidate id:
 - Judge only the content in front of you. Do not claim to have checked facts externally.
 - Be decisive. Do not pass a post with a high factual risk or a weak hook just because it is acceptable.
 - Hard policy limits (such as maximum length) are also enforced by the application after your review. Your recommendation cannot override them.
+- Phase 9 discovery runs: flag manufactured or exaggerated controversy, personal attacks, engagement bait, opinions or unverified claims presented as facts, and claims not attributed to their source. A question to @grok must be genuinely useful to readers on its own; flag it if it is bait or repeats an obvious question.

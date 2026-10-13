@@ -6,6 +6,7 @@ from typing import Protocol
 from social_growth_agent.models import (
     AnalyticsFetch,
     MetricsScope,
+    PlatformPost,
     PublishRequest,
     PublishResult,
     ResearchQuery,
@@ -74,3 +75,14 @@ class SocialAnalyticsProvider(Protocol):
     """Most post ids one request may carry."""
 
     def fetch_post_metrics(self, post_ids: Sequence[str]) -> AnalyticsFetch: ...
+
+
+class PostVerifier(Protocol):
+    """Looks up one post by id to verify a manual publication (Phase 9): its author,
+    text and creation time. Read-only, one request, no retries. Returns None when the
+    platform says the post does not exist or is not visible. Raises ``AnalyticsError``
+    when the request failed. Errors never contain credentials or raw responses."""
+
+    provider_name: str
+
+    def lookup_post(self, post_id: str) -> PlatformPost | None: ...

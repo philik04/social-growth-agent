@@ -52,7 +52,14 @@ from social_growth_agent.errors import (
     InvalidExperimentError,
 )
 from social_growth_agent.graph import RunConfig
-from social_growth_agent.models import Account, ContentStrategy, RunStatus, new_id, utc_now
+from social_growth_agent.models import (
+    Account,
+    ContentIntent,
+    ContentStrategy,
+    RunStatus,
+    new_id,
+    utc_now,
+)
 from social_growth_agent.models.experiment import (
     AnalysisStage,
     ExperimentAnalysis,
@@ -362,6 +369,10 @@ class ExperimentService:
         """Randomize, then insert the run and its assignment in one transaction. The run
         starts (and may call models and the research provider) only after the commit."""
         now = now or utc_now()
+        if body.config.content_policy.content_intent is ContentIntent.GROK_QUESTION:
+            # Phase 9: Grok questions are manual-only and occasional; they are not
+            # randomized into experiments.
+            raise InvalidExperimentError("Grok questions are excluded from experiments")
         try:
             with self._db.transaction() as session:
                 row = xdb.get(session, experiment_id, lock=True)

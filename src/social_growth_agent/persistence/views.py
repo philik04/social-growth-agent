@@ -14,6 +14,7 @@ from social_growth_agent.models import (
     PublicationStatus,
     RunStatus,
 )
+from social_growth_agent.models.discovery import OpportunityEvidence
 from social_growth_agent.models.experiment import (
     EvidenceClass,
     ExperimentDesign,
@@ -64,6 +65,8 @@ class RunSummary(View):
     created_at: datetime
     updated_at: datetime
     failure: RunFailure | None
+    opportunity_id: str | None = None
+    """The discovery opportunity this run was started from (Phase 9)."""
 
 
 class FetchView(View):
@@ -100,6 +103,9 @@ class FindingView(View):
     claim_type: str
     signal_strength: float
     evidence_source_ids: list[str]
+    claim_kind: str | None = None
+    """Phase 9 discovery runs: the claim kind after validation against the evidence."""
+    verification: str | None = None
 
 
 class ResearchView(View):
@@ -142,6 +148,10 @@ class CandidateView(View):
     research_finding_ids: list[str]
     critiques: list[CritiqueView]
     """Oldest first; the last one is the critique of record."""
+    content_intent: str | None = None
+    """Phase 9: the run's content intent (None for runs without one)."""
+    manual_only: bool = False
+    """Phase 9: the text mentions an account, so only a person may post it (export it)."""
 
 
 class DecisionView(View):
@@ -314,6 +324,15 @@ class PublishedPostView(View):
     analytics: AnalyticsSummary
 
 
+class DiscoveryLineage(View):
+    opportunity_id: str | None
+    session_id: str | None
+    evidence: list[OpportunityEvidence]
+    manual_export_id: str | None
+    manual_publication_id: str | None
+    verified_author_id: str | None
+
+
 class LineageView(View):
     """From one publication back to everything that produced it."""
 
@@ -331,6 +350,9 @@ class LineageView(View):
     strategy: dict[str, Any]
     account: dict[str, Any]
     metrics: list[MetricSnapshotView]
+    discovery: DiscoveryLineage | None = None
+    """Phase 9: the opportunity and evidence the run started from, and the manual
+    export/registration when the post was published by hand."""
 
 
 class RunDetail(View):
