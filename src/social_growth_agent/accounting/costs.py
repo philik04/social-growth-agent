@@ -113,6 +113,41 @@ class CostEstimate(BaseModel):
     total: Decimal | None = Field(description="None unless every billable price is known.")
 
 
+def merge_usage(parts: "list[UsageCounts]") -> UsageCounts:
+    """Sum usage across runs, per provider (and model). Analytics ``requests`` are not
+    additive across runs (one batched request can touch several), so the merged figure is
+    an upper bound; post reads and token counts add up exactly."""
+    research: dict[str, ResearchUsage] = {}
+    llm: dict[tuple[str, str], LLMUsage] = {}
+    publishing: dict[str, PublishUsage] = {}
+    analytics: dict[str, AnalyticsUsage] = {}
+    for part in parts:
+        for r in part.research:
+            research[r.provider] = _add(research.get(r.provider), r)
+        for m in part.llm:
+            llm[(m.provider, m.model)] = _add(llm.get((m.provider, m.model)), m)
+        for p in part.publishing:
+            publishing[p.provider] = _add(publishing.get(p.provider), p)
+        for a in part.analytics:
+            analytics[a.provider] = _add(analytics.get(a.provider), a)
+    return UsageCounts(
+        research=[research[k] for k in sorted(research)],
+        llm=[llm[k] for k in sorted(llm)],
+        publishing=[publishing[k] for k in sorted(publishing)],
+        analytics=[analytics[k] for k in sorted(analytics)],
+    )
+
+
+def _add[U: BaseModel](seen: U | None, new: U) -> U:
+    if seen is None:
+        return new
+    summed = {
+        name: getattr(seen, name) + value if isinstance(value, int) else value
+        for name, value in new
+    }
+    return type(new).model_validate(summed)
+
+
 def estimate_cost(usage: UsageCounts, prices: PriceList, *, basis: str) -> CostEstimate:
     lines: list[CostLine] = []
     unbilled = set(prices.unbilled_providers)

@@ -247,6 +247,8 @@ class StrategyVersionOrigin(StrEnum):
     REGISTERED = "registered"
     IMPORTED_FROM_RUN = "imported_from_run"
     PROPOSAL = "proposal"
+    EXPERIMENT = "experiment"
+    """Phase 8: adopted (as an inactive version) from a concluded, confirmatory experiment."""
 
 
 class StrategyChange(DomainModel):

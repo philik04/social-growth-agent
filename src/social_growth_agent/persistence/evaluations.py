@@ -82,13 +82,13 @@ def load_posts(
                 strategy_id=run.strategy_id,
                 strategy_version=run.strategy_version,
                 strategy_digest=digests[run.id],
-                snapshot=None if metric is None else _snapshot(metric),
+                snapshot=None if metric is None else snapshot_input(metric),
             )
         )
     return posts
 
 
-def _snapshot(m: PostMetricRow) -> SnapshotInput:
+def snapshot_input(m: PostMetricRow) -> SnapshotInput:
     return SnapshotInput(
         post_metric_id=m.id,
         provider=m.provider,

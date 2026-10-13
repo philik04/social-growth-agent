@@ -1,17 +1,20 @@
 """Strategy Agent (Phase 7): drafts a strategy proposal from one evidence package.
 
-Input is the evaluation summary (aggregates, comparison ids, confounders) and the current
-strategy, nothing else: no post text, topics, findings or source posts, so the model
-cannot be steered by content it would otherwise read. Its output is untrusted until
-``policies.strategy_changes.validate_proposal`` accepts it.
+Input is a compact digest of the evaluation summary (Phase 8, ``strategy-v2``: rate
+metrics along the hook, length and posting-time dimensions, comparison ids, confounders;
+see ``evidence_digest``) and the two proposable strategy fields, nothing else: no post
+text, topics, findings or source posts, so the model cannot be steered by content it
+would otherwise read. Its output is untrusted until
+``policies.strategy_changes.validate_proposal`` accepts it, against the same digest.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field, JsonValue
 
 from social_growth_agent.agents.base import Structured, call_llm, load_prompt
+from social_growth_agent.agents.evidence_digest import digest_payload
 from social_growth_agent.models import ContentStrategy, HookType
 from social_growth_agent.models.strategy import (
     EvaluationSummary,
@@ -24,7 +27,7 @@ from social_growth_agent.models.strategy import (
 from social_growth_agent.policies.content_policy import DEFAULT_MAX_POST_LENGTH
 from social_growth_agent.providers import LLMProvider, LLMRequest, LLMSettings
 
-PROMPT_VERSION = "strategy-v1"
+PROMPT_VERSION = "strategy-v2"
 
 
 class LengthDraft(BaseModel):
@@ -63,8 +66,10 @@ class StrategyProposalDraft(BaseModel):
 class ProposalContext:
     evaluation_id: str
     summary: EvaluationSummary
+    """The reduced summary from ``evidence_digest.digest_summary``."""
     thresholds: dict[str, int]
     strategy: ContentStrategy
+    omitted: list[str] = field(default_factory=list)
 
 
 class StrategyAgent:
@@ -78,11 +83,14 @@ class StrategyAgent:
         return call_llm(self._llm, self.request(ctx), StrategyProposalDraft)
 
     def request(self, ctx: ProposalContext) -> LLMRequest:
+        strategy = ctx.strategy.model_dump(mode="json")
         payload: dict[str, JsonValue] = {
             "evaluation_id": ctx.evaluation_id,
-            "evaluation": ctx.summary.model_dump(mode="json"),
+            "evidence": digest_payload(ctx.summary, ctx.omitted),
             "thresholds": dict(ctx.thresholds),
-            "current_strategy": ctx.strategy.model_dump(mode="json"),
+            "current_strategy": {
+                k: strategy[k] for k in ("id", "version", "preferred_hooks", "length_guidance")
+            },
             "allowed_fields": [f.value for f in ProposableField],
             "hook_types": [h.value for h in HookType],
             "max_post_length": DEFAULT_MAX_POST_LENGTH,
@@ -95,7 +103,7 @@ class StrategyAgent:
             agent=self.name,
             task="strategy.propose",
             system=load_prompt("strategy"),
-            prompt=f"{header}\n{json.dumps(payload, indent=1)}",
+            prompt=f"{header}\n{json.dumps(payload, separators=(',', ':'))}",
             payload=payload,
             settings=self.settings,
         )

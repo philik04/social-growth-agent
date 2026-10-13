@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from social_growth_agent.errors import (
     DatabaseUnavailableError,
     InvalidEvaluationRequestError,
+    InvalidExperimentError,
     InvalidReviewError,
     InvalidRunStateError,
     InvalidScheduleError,
@@ -24,6 +25,7 @@ _STATUS: list[tuple[type[SocialGrowthError], int]] = [
     (ResourceNotFoundError, 404),
     (InvalidScheduleError, 422),
     (InvalidEvaluationRequestError, 422),
+    (InvalidExperimentError, 422),
     (ReviewAuthMissingError, 401),
     (ReviewAuthInvalidError, 403),
     (ReviewAuthNotConfiguredError, 503),

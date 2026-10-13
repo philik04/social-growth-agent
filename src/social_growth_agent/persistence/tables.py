@@ -8,7 +8,9 @@ service and the publisher worker. Analytics (Phase 6) is not graph state either:
 ``analytics_jobs``, ``analytics_requests``, ``analytics_attempts`` and ``post_metrics``
 are written by the analytics service and worker. The strategy tables (Phase 7) are
 written only by the evaluation and strategy services; five of them are append-only,
-enforced by a trigger from migration 0005. Execution state (where a run resumes)
+enforced by a trigger from migration 0005. The experiment tables (Phase 8) are written
+only by the experiment service; arms, assignments, events and results are append-only
+(migration 0006). Execution state (where a run resumes)
 lives in LangGraph's checkpoint tables, which are not declared here.
 
 Provenance is enforced with foreign keys: a finding's evidence must reference a post
@@ -573,7 +575,7 @@ IMMUTABLE_TABLES = (
     "evaluation_observations",
     "strategy_proposal_decisions",
 )
-STRATEGY_VERSION_ORIGINS = ("registered", "imported_from_run", "proposal")
+STRATEGY_VERSION_ORIGINS = ("registered", "imported_from_run", "proposal", "experiment")
 PROPOSAL_STATUSES = (
     "generating",
     "pending_review",
@@ -612,6 +614,16 @@ class StrategyVersionRow(Base):
     auth_method: Mapped[str | None] = mapped_column(String(32))
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+    # Phase 8 (0006): the concluded experiment a version was adopted from; one adoption
+    # per result.
+    source_experiment_result_id: Mapped[str | None] = mapped_column(
+        ForeignKey(
+            "experiment_results.id",
+            use_alter=True,
+            name="fk_strategy_versions_source_experiment_result",
+        ),
+        unique=True,
+    )
 
 
 class StrategyActivationRow(Base):
@@ -766,6 +778,140 @@ class StrategyProposalDecisionRow(Base):
     reviewed_evaluation_digest: Mapped[str | None] = mapped_column(String(64))
     resulting_version_id: Mapped[str | None] = mapped_column(ForeignKey("strategy_versions.id"))
     decided_at: Mapped[datetime] = mapped_column(Timestamp)
+
+
+# --- experiments (Phase 8) ----------------------------------------------------------------
+# Arms, assignments, events and results are append-only (trigger from migration 0006). An
+# experiment row's status and timestamps change; its design never does (another trigger).
+
+EXPERIMENT_IMMUTABLE_TABLES = (
+    "experiment_arms",
+    "experiment_assignments",
+    "experiment_events",
+    "experiment_results",
+)
+EXPERIMENT_STATUSES = ("draft", "approved", "running", "stopped", "concluded", "cancelled")
+EXPERIMENT_EVENT_KINDS = (
+    "created",
+    "approved",
+    "started",
+    "stopped",
+    "cancelled",
+    "unblinded",
+    "concluded",
+    "adopted",
+)
+
+
+class ExperimentRow(Base):
+    """A pre-registered experiment. ``design`` (and its digest) are fixed at creation."""
+
+    __tablename__ = "experiments"
+    __table_args__ = (
+        CheckConstraint(_in("status", EXPERIMENT_STATUSES), name="status"),
+        CheckConstraint(_in("factor", ("hook_type", "length")), name="factor"),
+        Index(
+            "uq_experiments_open",
+            "account_id",
+            unique=True,
+            postgresql_where=text("status IN ('approved', 'running')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    strategy_id: Mapped[str] = mapped_column(String(64))
+    base_version_id: Mapped[str] = mapped_column(ForeignKey("strategy_versions.id"))
+    factor: Mapped[str] = mapped_column(String(16))
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    design: Mapped[dict[str, Any]] = mapped_column(Json)
+    design_sha256: Mapped[str] = mapped_column(String(64))
+    snapshot_age_seconds: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16))
+    peeked: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    stop_reason: Mapped[str | None] = mapped_column(String(32))
+    created_by: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+    approved_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    started_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    stopped_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    unblinded_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    concluded_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    cancelled_at: Mapped[datetime | None] = mapped_column(Timestamp)
+
+
+class ExperimentArmRow(Base):
+    __tablename__ = "experiment_arms"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "label", name="uq_experiment_arms_label"),
+        UniqueConstraint("experiment_id", "position", name="uq_experiment_arms_position"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"))
+    label: Mapped[str] = mapped_column(String(32))
+    position: Mapped[int] = mapped_column(Integer)
+    is_control: Mapped[bool] = mapped_column(Boolean)
+    treatment: Mapped[dict[str, Any]] = mapped_column(Json)
+
+
+class ExperimentAssignmentRow(Base):
+    """One randomized run. ``UNIQUE (run_id)``: a run belongs to at most one arm;
+    ``UNIQUE (experiment_id, block_no, position)``: a slot is drawn once."""
+
+    __tablename__ = "experiment_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "experiment_id", "block_no", "position", name="uq_experiment_assignments_slot"
+        ),
+        CheckConstraint("block_no >= 0 AND position >= 0", name="slot"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), index=True)
+    arm_id: Mapped[str] = mapped_column(ForeignKey("experiment_arms.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), unique=True)
+    block_no: Mapped[int] = mapped_column(Integer)
+    position: Mapped[int] = mapped_column(Integer)
+    assigned_by: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    assigned_at: Mapped[datetime] = mapped_column(Timestamp)
+
+
+class ExperimentEventRow(Base):
+    __tablename__ = "experiment_events"
+    __table_args__ = (CheckConstraint(_in("kind", EXPERIMENT_EVENT_KINDS), name="kind"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    actor: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column(Timestamp)
+
+
+class ExperimentResultRow(Base):
+    """The immutable conclusion. One per experiment."""
+
+    __tablename__ = "experiment_results"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), unique=True)
+    verdict: Mapped[str] = mapped_column(String(40))
+    evidence_class: Mapped[str] = mapped_column(String(16))
+    peeked: Mapped[bool] = mapped_column(Boolean)
+    cutoff: Mapped[datetime] = mapped_column(Timestamp)
+    analysis_version: Mapped[str] = mapped_column(String(16))
+    input_digest: Mapped[str] = mapped_column(String(64))
+    digest: Mapped[str] = mapped_column(String(64))
+    analysis: Mapped[dict[str, Any]] = mapped_column(Json)
+    flags: Mapped[list[str]] = mapped_column(Json)
+    concluded_by: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
 
 
 Index("ix_runs_created_at", RunRow.created_at.desc())

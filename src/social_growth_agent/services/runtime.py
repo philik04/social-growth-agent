@@ -35,6 +35,7 @@ from social_growth_agent.providers.factory import build_analytics_provider, buil
 from social_growth_agent.services.analytics import AnalyticsSchedule, AnalyticsService
 from social_growth_agent.services.analytics_worker import AnalyticsWorker
 from social_growth_agent.services.evaluations import EvaluationDefaults, EvaluationService
+from social_growth_agent.services.experiments import ExperimentService
 from social_growth_agent.services.factory import build_dependencies
 from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.publisher import EmbeddedWorker, PublisherWorker
@@ -59,6 +60,8 @@ class Runtime:
     evaluations: EvaluationService | None = None
     """Phase 7; always set by ``build_runtime``."""
     strategies: StrategyService | None = None
+    experiments: ExperimentService | None = None
+    """Phase 8; always set by ``build_runtime``."""
     review_auth: ReviewAuth = field(default_factory=ReviewAuth)
 
     def start_embedded_worker(self) -> None:
@@ -113,6 +116,9 @@ def build_runtime(
     publications = PublicationService(db, window=window, analytics=schedule)
     analytics = AnalyticsService(db, schedule=schedule)
     evaluations = EvaluationService(db, defaults=evaluation_defaults(settings), prices=prices)
+    experiments = ExperimentService(
+        db, runs=service, defaults=evaluation_defaults(settings), prices=prices
+    )
     strategies = StrategyService(
         db,
         prices=prices,
@@ -132,6 +138,7 @@ def build_runtime(
         analytics=analytics,
         evaluations=evaluations,
         strategies=strategies,
+        experiments=experiments,
         review_auth=ReviewAuth.from_settings(settings),
         db=db,
         pool=pool,

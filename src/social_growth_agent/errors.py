@@ -288,3 +288,25 @@ class ReviewAuthMissingError(ReviewAuthError):
 
 class ReviewAuthInvalidError(ReviewAuthError):
     """A review token was presented but does not match (HTTP 403)."""
+
+
+# --- experiments (Phase 8) ----------------------------------------------------------------
+
+
+class ExperimentNotFoundError(ResourceNotFoundError):
+    pass
+
+
+class InvalidExperimentError(SocialGrowthError):
+    """An experiment design or request is invalid (unknown snapshot age, a length arm
+    outside the content policy...) (HTTP 422)."""
+
+
+class ExperimentStateError(InvalidRunStateError):
+    """The experiment is not in a state that allows the operation, or another experiment
+    is open for the account (HTTP 409)."""
+
+
+class AdoptionRefusedError(ExperimentStateError):
+    """The result is not eligible for adoption: not a confirmatory ``favours_variant``,
+    synthetic, or the base strategy is no longer active (HTTP 409)."""

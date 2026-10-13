@@ -136,6 +136,7 @@ def insert_version(
     created_by: str | None,
     auth_method: str | None,
     note: str | None,
+    source_experiment_result_id: str | None = None,
 ) -> StrategyVersionRow:
     content = strategy.model_dump(mode="json")
     row = StrategyVersionRow(
@@ -150,6 +151,7 @@ def insert_version(
         created_by=created_by,
         auth_method=auth_method,
         note=note,
+        source_experiment_result_id=source_experiment_result_id,
     )
     session.add(row)
     session.flush()
@@ -171,6 +173,7 @@ def version_view(row: StrategyVersionRow, active_id: str | None) -> StrategyVers
         note=row.note,
         created_at=row.created_at,
         active=row.id == active_id,
+        source_experiment_result_id=row.source_experiment_result_id,
     )
 
 

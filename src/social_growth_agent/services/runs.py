@@ -14,6 +14,8 @@ from collections.abc import Callable
 from concurrent.futures import Executor, Future
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from social_growth_agent.accounting import PriceList, estimate_cost
 from social_growth_agent.errors import (
     InvalidReviewError,
@@ -76,36 +78,48 @@ class RunService:
     def create_run(
         self, account: Account, strategy: ContentStrategy, config: RunConfig | None = None
     ) -> RunSummary:
-        config = config or RunConfig()
+        with self._db.transaction() as session:
+            run_id = self.insert_run(session, account, strategy, config or RunConfig())
+        self.start_inserted(run_id)
+        return self.get_summary(run_id)
+
+    def insert_run(
+        self, session: Session, account: Account, strategy: ContentStrategy, config: RunConfig
+    ) -> str:
+        """Insert a queued run inside the caller's transaction; nothing executes until
+        ``start_inserted`` is called after commit. Phase 8 uses this to persist an
+        experiment assignment in the same transaction as its run."""
         run_id = new_id("run")
         query = config.research_query or default_research_query(strategy)
-        with self._db.transaction() as session:
-            # Phase 7: a registered (id, version) must be used with its exact body; an
-            # unregistered inline strategy still works (Phase 1-6 compatibility).
-            version_ref = strategy_store.registered_match(session, strategy)
-            pricing_id = repo.save_price_list(session, self._prices)
-            repo.insert_run(
-                session,
-                RunRow(
-                    id=run_id,
-                    status=RunStatus.QUEUED.value,
-                    research_query=query.text,
-                    account=account.model_dump(mode="json"),
-                    strategy=strategy.model_dump(mode="json"),
-                    config=config.model_dump(mode="json"),
-                    strategy_id=strategy.id,
-                    strategy_version=strategy.version,
-                    research_attempts=0,
-                    generation_attempts=0,
-                    regeneration_rounds=0,
-                    edit_rounds=0,
-                    review_candidate_ids=[],
-                    pricing_id=pricing_id,
-                    strategy_version_ref=version_ref,
-                ),
-            )
+        # Phase 7: a registered (id, version) must be used with its exact body; an
+        # unregistered inline strategy still works (Phase 1-6 compatibility).
+        version_ref = strategy_store.registered_match(session, strategy)
+        pricing_id = repo.save_price_list(session, self._prices)
+        repo.insert_run(
+            session,
+            RunRow(
+                id=run_id,
+                status=RunStatus.QUEUED.value,
+                research_query=query.text,
+                account=account.model_dump(mode="json"),
+                strategy=strategy.model_dump(mode="json"),
+                config=config.model_dump(mode="json"),
+                strategy_id=strategy.id,
+                strategy_version=strategy.version,
+                research_attempts=0,
+                generation_attempts=0,
+                regeneration_rounds=0,
+                edit_rounds=0,
+                review_candidate_ids=[],
+                pricing_id=pricing_id,
+                strategy_version_ref=version_ref,
+            ),
+        )
+        return run_id
+
+    def start_inserted(self, run_id: str) -> None:
+        """Submit a committed, queued run for execution."""
         self._submit(run_id, lambda observe: self._start(run_id, observe))
-        return self.get_summary(run_id)
 
     def submit_review(self, run_id: str, decision: ReviewDecision) -> RunSummary:
         """Validate against the paused checkpoint, claim the run, resume asynchronously.

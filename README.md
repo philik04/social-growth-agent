@@ -3,7 +3,15 @@
 An agentic orchestration system that grows a creator's or founder's presence on X by running a
 closed loop: **research → generate → critique → human approval → publish → analyze → update strategy**.
 
-> Status: **Phase 7, strategy evaluation.** Deterministic, age-matched evaluations describe
+> Status: **Phase 8, experiments.** Pre-registered A/B experiments randomize each new run
+> to one hook type or length range (permuted blocks, enforced as a hard content rule) and
+> compare the published posts at one age-matched snapshot with a bootstrap interval. Outcomes
+> stay masked until the experiment concludes; looking early is an explicit, irreversible
+> unblinding that makes the result exploratory. A confirmatory result on real data can be
+> adopted (review token) into an inactive strategy version, activated in the usual separate
+> step. Synthetic results are never adoptable ([docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)).
+>
+> Phase 7: deterministic, age-matched evaluations describe
 > how published posts performed by hook, length, posting hour and strategy version, with
 > explicit evidence levels, excluded posts and their reasons, and no causal claims. An
 > opt-in Strategy Agent may propose changes to two soft preferences (preferred hooks and
@@ -180,6 +188,27 @@ registered explicitly with `uv run sga-strategy import-runs --dry-run` (then wit
 `--dry-run`); conflicting bodies are reported, never merged. See
 [docs/STRATEGY_EVALUATION.md](docs/STRATEGY_EVALUATION.md).
 
+### Running an experiment
+
+```bash
+# six offline scenarios on SYNTHETIC data (positive, null, insufficient data, attrition,
+# missing impressions, early unblinding); nothing posted, nothing adoptable
+DATABASE_URL=postgresql://sga@localhost:5433/sga_scratch \
+  uv run python -m social_growth_agent.services.experiment_demo
+
+curl -s -XPOST localhost:8000/experiments/feasibility -H 'content-type: application/json' \
+  -d @design.json        # duration and power tables for a design; stores nothing
+curl -s -XPOST localhost:8000/experiments -H "Authorization: Bearer $STRATEGY_REVIEW_TOKEN" \
+  -H 'content-type: application/json' -d @experiment.json   # full pre-registration incl. design
+curl -s -XPOST localhost:8000/experiments/$EXP/runs -H "Authorization: Bearer $STRATEGY_REVIEW_TOKEN" \
+  -H 'content-type: application/json' -d '{"account": {...}, "reviewer": "me"}'
+curl -s localhost:8000/experiments/$EXP/analysis              # funnel; outcomes masked while open
+```
+
+Every write needs `STRATEGY_REVIEW_TOKEN`, because a run can call the LLM and X. Runs still
+pause for human review and publish only on request; conclusion and adoption are explicit.
+Plan for months at personal-account volume. See [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+
 ### Live publishing (opt-in, creates ONE real post)
 
 ```bash
@@ -264,17 +293,17 @@ src/social_growth_agent/
   models/         domain objects (Pydantic, immutable)
   policies/       content policy (hard rules), critic gate, human edit policy, research + publish rules, strategy changes
   graph/          state, nodes, pure routing, builder, checkpoint serialization
-  agents/         research, content, critic, strategy, prompts/*.md, deterministic fakes
+  agents/         research, content, critic, strategy (+ evidence digest), prompts/*.md, deterministic fakes
   providers/      LLM + social-platform protocols, OpenAI adapter, x/ (research, publishing, analytics), mocks/
-  services/       WorkflowService, RunService, PublicationService, PublisherWorker, AnalyticsWorker, Evaluation/StrategyService, review auth, runtime, demos
-  persistence/    SQLAlchemy tables, Alembic migrations, recorder, ledgers, publications, analytics, lineage, evaluations, strategies, checkpointer, sga-db
-  analytics/      observed derived metrics and strategy evaluations (pure, deterministic)
+  services/       WorkflowService, RunService, PublicationService, PublisherWorker, AnalyticsWorker, Evaluation/StrategyService, ExperimentService + synthetic seed, review auth, runtime, demos
+  persistence/    SQLAlchemy tables, Alembic migrations, recorder, ledgers, publications, analytics, lineage, evaluations, strategies, experiments, checkpointer, sga-db
+  analytics/      observed derived metrics, strategy evaluations and experiment analysis (pure, deterministic)
   accounting/     price list (pricing.toml) and cost estimates
-  api/            FastAPI app: run, review, resume, usage, publication, analytics, evaluation and strategy endpoints
+  api/            FastAPI app: run, review, resume, usage, publication, analytics, evaluation, strategy and experiment endpoints
   evaluation/     critic evaluation harness
   observability/  structured logging, timing
 tests/
-docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ANALYTICS.md, STRATEGY_EVALUATION.md, ROADMAP.md
+docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ANALYTICS.md, STRATEGY_EVALUATION.md, EXPERIMENTS.md, ROADMAP.md
 pricing.toml      prices for cost estimates (blank by default; never in code)
 docker-compose.yml  local PostgreSQL only
 ```

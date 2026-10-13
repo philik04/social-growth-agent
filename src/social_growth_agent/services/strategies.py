@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from social_growth_agent.accounting import PriceList
+from social_growth_agent.agents.evidence_digest import digest_summary
 from social_growth_agent.agents.strategy import PROMPT_VERSION, ProposalContext, StrategyAgent
 from social_growth_agent.analytics.evaluation import EvaluationConfig, sha256_json
 from social_growth_agent.errors import (
@@ -538,9 +539,12 @@ class StrategyService:
             )
             return self.get_proposal(proposal_id)
 
+        # Phase 8: the model sees a compact digest, and is validated against the same.
+        digest, omitted = digest_summary(summary)
         context = ProposalContext(
             evaluation_id=evaluation_id,
-            summary=summary,
+            summary=digest,
+            omitted=omitted,
             thresholds={
                 "min_group_n": config.min_group_n,
                 "min_compare_n": config.min_compare_n,
@@ -575,7 +579,7 @@ class StrategyService:
         latency = (time.perf_counter() - started) * 1000
         try:
             proposal = validate_proposal(
-                result.output, summary=summary, config=config, base=strategy
+                result.output, summary=digest, config=config, base=strategy
             )
         except ProposalValidationError as exc:
             self._finish(

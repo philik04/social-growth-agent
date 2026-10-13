@@ -5,13 +5,14 @@ Adding a rule means writing one small ``HardRule`` and adding it to ``DEFAULT_RU
 """
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from social_growth_agent.models import (
     ContentCandidate,
     CritiqueVerdict,
+    HookType,
     PolicyViolation,
     PostFormat,
 )
@@ -26,11 +27,33 @@ class ContentPolicy(BaseModel):
 
     max_post_length: int = Field(default=DEFAULT_MAX_POST_LENGTH, ge=1)
     allowed_formats: frozenset[PostFormat] = frozenset({PostFormat.SINGLE})
+    # Experiment treatments (Phase 8). Unset outside experiments, so runs and stored
+    # checkpoints of Phases 1-7 are unchanged.
+    min_post_length: int | None = Field(default=None, ge=1)
+    required_hook_type: HookType | None = Field(
+        default=None,
+        description="Every candidate must DECLARE this hook type. The rule checks the "
+        "declared label only; it cannot verify that the text really uses the hook.",
+    )
+
+    @model_validator(mode="after")
+    def _length_range(self) -> Self:
+        if self.min_post_length is not None and self.min_post_length > self.max_post_length:
+            raise ValueError("min_post_length must not exceed max_post_length")
+        return self
 
     def prompt_payload(self) -> dict[str, JsonValue]:
         """The constraints as shown to agents (enforcement stays in code)."""
         formats: list[JsonValue] = [f.value for f in sorted(self.allowed_formats)]
-        return {"max_post_length": self.max_post_length, "allowed_formats": formats}
+        payload: dict[str, JsonValue] = {
+            "max_post_length": self.max_post_length,
+            "allowed_formats": formats,
+        }
+        if self.min_post_length is not None:
+            payload["min_post_length"] = self.min_post_length
+        if self.required_hook_type is not None:
+            payload["required_hook_type"] = self.required_hook_type.value
+        return payload
 
 
 class HardRule(Protocol):
@@ -77,7 +100,45 @@ class NonBlankContentRule:
         return PolicyViolation(rule=self.name, detail="content is blank")
 
 
-DEFAULT_RULES: tuple[HardRule, ...] = (NonBlankContentRule(), MaxLengthRule(), AllowedFormatRule())
+class MinLengthRule:
+    """Experiment length arms (Phase 8): no-op unless ``min_post_length`` is set."""
+
+    name = "min_post_length"
+
+    def check(self, candidate: ContentCandidate, policy: ContentPolicy) -> PolicyViolation | None:
+        minimum = policy.min_post_length
+        length = len(candidate.content)
+        if minimum is None or length >= minimum:
+            return None
+        return PolicyViolation(
+            rule=self.name, detail=f"{length} characters is below the minimum of {minimum}"
+        )
+
+
+class RequiredHookRule:
+    """Experiment hook arms (Phase 8): the candidate's declared hook type must match.
+    This enforces the label, not the writing: whether the text really uses the hook is
+    only estimated later (``policies.treatment.hook_adherence``)."""
+
+    name = "required_hook_type"
+
+    def check(self, candidate: ContentCandidate, policy: ContentPolicy) -> PolicyViolation | None:
+        required = policy.required_hook_type
+        if required is None or candidate.hook_type == required:
+            return None
+        return PolicyViolation(
+            rule=self.name,
+            detail=f"declared hook '{candidate.hook_type}' but this run requires '{required}'",
+        )
+
+
+DEFAULT_RULES: tuple[HardRule, ...] = (
+    NonBlankContentRule(),
+    MaxLengthRule(),
+    AllowedFormatRule(),
+    MinLengthRule(),
+    RequiredHookRule(),
+)
 
 
 def find_violations(

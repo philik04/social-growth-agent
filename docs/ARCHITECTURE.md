@@ -482,6 +482,38 @@ POST /runs {"use_active_strategy": true}             -> runs.strategy_version_re
 - **Proposals are their own ledger**: committed as `generating` before the model call, at
   most one open per account, with explicit retry of failed or stale ones.
 
+## 8f. Experiments (Phase 8)
+
+Full detail in [EXPERIMENTS.md](EXPERIMENTS.md). An experiment turns a Phase 7 observation
+into a randomized test:
+
+```
+POST /experiments (token)        pre-registration frozen by trigger, base version pinned
+POST .../approve, .../start      at most one approved/running experiment per account
+POST .../runs (token)            lock experiment -> draw permuted-block slot -> run + assignment
+                                 in one transaction -> run starts (arm = hard ContentPolicy rule)
+   normal graph: review, explicit publish, analytics snapshots
+GET  .../analysis                analytics/experiment.py (pure): funnel, balance, adherence;
+                                 outcomes masked while open
+POST .../conclude (token)        experiment_results (immutable, input digest)
+POST .../adopt (token)           inactive strategy_versions row (origin experiment)
+```
+
+- **Randomization in the database.** The slot is drawn under `SELECT ... FOR UPDATE` with a
+  system RNG; unique constraints on the slot and the run make a duplicate impossible even
+  if the lock were bypassed.
+- **Treatment as a hard rule.** The arm becomes `required_hook_type` or a length range in the
+  run's `ContentPolicy`, so the critic gate and human edits are held to it. A declared hook
+  is a label; adherence is estimated, not verified.
+- **Pre-registered, fixed horizon.** Primary metric, planned n, snapshot age, duration and
+  stopping rules are set before assignment and cannot change. Conclusion needs every arm at
+  n, the maximum duration, or an explicit stop; below n the verdict is `insufficient_data`.
+- **Masking, not blinding.** The analysis endpoint hides outcome summaries until conclusion;
+  raw metrics stay readable elsewhere and are documented as such. Unblinding is an
+  irreversible event that makes the verdict exploratory and blocks adoption.
+- **Humans decide.** Every write needs the review token; nothing starts, stops, publishes,
+  adopts or activates on its own. Synthetic results are never adoptable.
+
 ## 9. Layering
 
 ```
@@ -491,7 +523,8 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
           |     \-> persistence (tables, recorder, ledgers, publications, checkpointer)  accounting (prices, estimates)
           \-> publisher worker -> providers (SocialPublisher) + policies (publish rules)
           \-> analytics worker -> providers (SocialAnalyticsProvider) + policies (retry) + analytics (derived)
-          \-> evaluations -> analytics (evaluation, pure)   strategies -> agents (strategy) + policies (strategy changes)
+          \-> evaluations -> analytics (evaluation, pure)   strategies -> agents (strategy, evidence digest) + policies (strategy changes)
+          \-> experiments -> analytics (experiment, feasibility; pure) + persistence (experiments) + RunService
                      models  <- everything      config -> services.factory, providers.factory
 ```
 
@@ -509,5 +542,5 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
 
 See [ROADMAP.md](ROADMAP.md). Next structural additions:
 
-- Phase 8: experiments that randomize hook or length per run, so a Phase 7 hypothesis can be
-  tested instead of only observed.
+- Phase 9: a dashboard for the review queue, run traces, evaluations and experiments.
+- Phase 10: deployment, CI, OpenTelemetry and per-reviewer authentication.

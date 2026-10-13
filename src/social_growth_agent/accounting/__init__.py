@@ -8,6 +8,7 @@ from social_growth_agent.accounting.costs import (
     PublishUsage,
     UsageCounts,
     estimate_cost,
+    merge_usage,
 )
 from social_growth_agent.accounting.pricing import ModelPrice, PriceList, load_price_list
 
@@ -22,4 +23,5 @@ __all__ = [
     "UsageCounts",
     "estimate_cost",
     "load_price_list",
+    "merge_usage",
 ]

@@ -108,11 +108,14 @@ def fake_content(request: LLMRequest) -> CandidateBatch:
         if notes:
             claim = f"Here's what worked (reviewer: {notes[-1][:40]})."
         revises = str(previous[i]["candidate_id"]) if i < len(previous) else None
+        content = f"[{attempt}.{i + 1}] What we learned about {theme}. {claim}"
+        hook = _HOOKS[(attempt + i) % len(_HOOKS)]
+        content, hook = _experiment_constraints(_dict(request, "policy"), content, hook, theme)
         drafts.append(
             CandidateDraft(
-                content=f"[{attempt}.{i + 1}] What we learned about {theme}. {claim}",
+                content=content,
                 topic=theme,
-                hook_type=_HOOKS[(attempt + i) % len(_HOOKS)],
+                hook_type=hook,
                 format=PostFormat.SINGLE,
                 target_audience=audience,
                 research_finding_ids=[str(finding["id"])],
@@ -121,6 +124,37 @@ def fake_content(request: LLMRequest) -> CandidateBatch:
             )
         )
     return CandidateBatch(candidates=drafts)
+
+
+_HOOK_OPENERS = {
+    HookType.QUESTION: "Ever wondered what works for {theme}? ",
+    HookType.NUMBER: "3 things we learned about {theme}. ",
+    HookType.HOW_TO: "How to get better at {theme}: ",
+    HookType.STORY: "Last week we tried something new with {theme}. ",
+    HookType.CONTRARIAN: "Unpopular opinion about {theme}: ",
+}
+
+
+def _experiment_constraints(
+    policy: dict[str, Any], content: str, hook: HookType, theme: str
+) -> tuple[str, HookType]:
+    """Follow experiment treatments (Phase 8) when the policy sets them. Without those
+    keys the output is exactly as before, so Phase 1-7 runs are unchanged."""
+    required = policy.get("required_hook_type")
+    if required is not None:
+        hook = HookType(str(required))
+        content = _HOOK_OPENERS[hook].format(theme=theme) + content
+    minimum = policy.get("min_post_length")
+    if minimum is not None or required is not None:
+        maximum = int(str(policy.get("max_post_length", 280)))
+        low = int(str(minimum)) if minimum is not None else 1
+        filler = f" More notes on {theme}."
+        while len(content) < low:
+            content += filler
+        content = content[:maximum].rstrip()
+        while len(content) < low:
+            content += "."
+    return content, hook
 
 
 def fake_critic(request: LLMRequest) -> CriticReport:
@@ -150,20 +184,20 @@ def fake_strategy(request: LLMRequest) -> StrategyProposalDraft:
     comparison with the largest such difference, as a low-confidence hypothesis. No
     hook comparison (or no rate data), or that hook already preferred: no change. Its
     text contains no numbers, so it never trips the invented-statistics check."""
-    evaluation = _dict(request, "evaluation")
+    evidence = _dict(request, "evidence")
     current = _dict(request, "current_strategy").get("preferred_hooks", [])
     best: tuple[Decimal, str, str] | None = None
-    for comparison in evaluation.get("comparisons", []):
-        if comparison.get("dimension") != "hook_type":
+    for comparison in evidence.get("comparisons", []):
+        ref = str(comparison.get("id", ""))
+        if not ref.startswith("cmp:hook_type:"):
             continue
-        for diff in comparison.get("differences", []):
-            value = diff.get("median_difference")
-            if diff.get("metric") != "engagement_rate" or value is None:
-                continue
-            delta = Decimal(str(value))
-            leader = comparison["group_a"] if delta > 0 else comparison["group_b"]
-            if delta != 0 and (best is None or abs(delta) > best[0]):
-                best = (abs(delta), str(comparison["comparison_id"]), str(leader))
+        value = comparison.get("rates", {}).get("engagement_rate", [None])[0]
+        if value is None:
+            continue
+        delta = Decimal(str(value))
+        leader = comparison["a"] if delta > 0 else comparison["b"]
+        if delta != 0 and (best is None or abs(delta) > best[0]):
+            best = (abs(delta), ref, str(leader))
     if best is None or current == [best[2]]:
         return StrategyProposalDraft(
             outcome=ProposalOutcome.NO_CHANGE,

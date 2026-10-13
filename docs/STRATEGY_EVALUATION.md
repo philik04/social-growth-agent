@@ -125,7 +125,7 @@ changes.
 ## 2. Proposals
 
 `POST /evaluations/{id}/proposals` asks the Strategy Agent (`agents/strategy.py`, prompt
-`strategy-v1`) for a proposal against the account's **active** version.
+`strategy-v2` since Phase 8; proposals made earlier record `strategy-v1`) for a proposal against the account's **active** version.
 
 - **Opt-in.** `STRATEGY_PROPOSER=disabled` (default) refuses with 409 and calls nothing.
   `fake` uses the deterministic offline agent; `openai` uses `OPENAI_API_KEY` and
@@ -134,8 +134,12 @@ changes.
 - **Insufficient evidence costs nothing.** For an `insufficient_evidence` evaluation the
   service records a deterministic `no_change` proposal without calling a model; it can only
   be rejected.
-- **What the model sees:** the evaluation summary (groups, comparisons, limitations) and the
-  current strategy. Never post text, never source posts, never credentials. The prompt
+- **What the model sees:** since `strategy-v2`, a compact digest of the evaluation summary
+  (hook, length and hour-block groups and comparisons, confounders, listed omissions) and
+  only the two proposable fields of the current strategy; the proposal is validated against
+  that digest, so it can cite only what the model was shown (see
+  [EXPERIMENTS.md](EXPERIMENTS.md#8-strategy-agent-digest-d8)). `strategy-v1` sent the
+  whole summary and strategy. Never post text, never source posts, never credentials. The prompt
   states that everything after the instructions is data.
 - **One open proposal per account** (`generating` or `pending_review`), enforced by a
   partial unique index, so two concurrent requests cannot both spend a model call.
@@ -275,7 +279,8 @@ RUN_LIVE_STRATEGY_PROPOSAL_DEMO=1 STRATEGY_PROPOSER=openai OPENAI_API_KEY=... DA
 - **Self-labelled hooks.** `hook_type` is what the Content Agent declared, not a measured
   property of the text.
 - **Confounding.** Time, topic, news, audience growth and posting hour all vary together;
-  nothing is randomized. Phase 8 (experiments) addresses this.
+  nothing is randomized here. Phase 8 experiments randomize hook or length per run; see
+  [EXPERIMENTS.md](EXPERIMENTS.md) and its own limitations.
 - **Public metrics only.** Impressions may be NULL for some posts, which removes them from
   rate statistics (their counts still appear).
 - **Length** is counted in Unicode code points, not X's weighted character count.

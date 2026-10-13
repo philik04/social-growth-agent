@@ -34,7 +34,7 @@ Checkpoints use the allowlisted serializer from Phase 1: only our own domain and
 can be deserialized. Domain rows are immutable records keyed by their ids and inserted with
 `ON CONFLICT DO NOTHING`, so the same state can be projected any number of times.
 
-## Schema (revision 0005)
+## Schema (revision 0006)
 
 All child tables reference `runs.id` with `ON DELETE CASCADE`.
 
@@ -60,13 +60,19 @@ All child tables reference `runs.id` with `ON DELETE CASCADE`.
 | `analytics_jobs` (0004) | `id`, `publication_id` → `publications`, UNIQUE (`publication_id`, `snapshot_age`), `age_seconds`, `schedule_basis` (`provider_created_at` \| `recorded_published_at`), `basis_at`, `scheduled_for`, `original_scheduled_for`, `origin` (`publish` \| `backfill`), `status` (CHECK), lease columns, `attempt_count`, `attempt_base`, `retry_not_before`, `failure_category`, `failure_message`, `rate_limit_reset_at`, `collected_at` | One planned snapshot; status: `scheduled`, `collecting`, `collected`, `failed`, `cancelled`. Index on (`status`, `scheduled_for`) for the claim query |
 | `analytics_requests` (0004) | `id`, `worker_id`, `provider`, `metrics_scope`, `post_ids` (JSON), `started_at`, `finished_at`, `outcome` (`started`, `succeeded`, `partial`, `failed`), `http_status`, `error_category`, `error_message`, `posts_returned`, rate-limit fields, `latency_ms` | Started ledger for every metrics read, committed before the call; may cover posts of several runs |
 | `analytics_attempts` (0004) | `id`, `request_id`, `job_id`, UNIQUE (`job_id`, `attempt`), `publication_id`, `provider_post_id`, `attempt`, `outcome` (`started`, `collected`, `not_found`, `failed`), `failure_category`, `started_at`, `finished_at` | One job's part in one request |
-| `strategy_versions` (0005) | `id`, `strategy_id`, UNIQUE (`strategy_id`, `version`), `account_id`, `content` (JSONB), `content_sha256`, `parent_version_id` → self, `origin` (`registered`, `imported_from_run`, `proposal`), `created_by`, `auth_method`, `note` | Immutable strategy versions |
+| `strategy_versions` (0005) | `id`, `strategy_id`, UNIQUE (`strategy_id`, `version`), `account_id`, `content` (JSONB), `content_sha256`, `parent_version_id` → self, `origin` (`registered`, `imported_from_run`, `proposal`, `experiment` (0006)), `created_by`, `auth_method`, `note` | Immutable strategy versions |
 | `strategy_activations` (0005) | `id`, `account_id`, `seq`, UNIQUE (`account_id`, `seq`), `strategy_version_id`, `previous_version_id` → `strategy_versions`, `activated_by`, `auth_method`, `note`, `activated_at` | Append-only history; the active version is the highest `seq`. The unique `seq` makes concurrent activations compare-and-set |
 | `performance_evaluations` (0005) | `id`, `account_id`, `strategy_id`, `snapshot_age`, `published_since`/`until`, `data_cutoff`, `synthetic`, `config` (JSONB), `config_version`, `request` (JSONB), `input_digest` UNIQUE, `digest`, `status`, counts, `summary` (JSONB), `duration_ms` | Immutable evidence package; the same normalized request maps to one row |
 | `evaluation_observations` (0005) | PK (`evaluation_id`, `publication_id`), `post_metric_id` → `post_metrics`, run and candidate ids, `eligible`, `exclusion_reason`, `metrics_provider`, `actual_age_seconds`, hook, origin, format, strategy id/version/digest/group, length and bucket, UTC hour and block, the six counts | One row per post considered; no content copied |
 | `strategy_proposals` (0005) | `id`, `evaluation_id`, `evaluation_digest`, `account_id`, `base_version_id` → `strategy_versions`, `status` (CHECK), `outcome`, `proposer`, `provider`, `model`, `prompt_version`, `proposal` (JSONB), `proposal_sha256`, `validation_errors`, `error_type`, `error_message`, `retry_of` UNIQUE → self, `requested_by`, `pricing_id`, timing, `llm_calls`, tokens | Its own started/finished ledger. Partial UNIQUE index on `account_id` WHERE status IN (`generating`, `pending_review`): one open proposal per account |
 | `strategy_proposal_decisions` (0005) | `id`, `proposal_id` UNIQUE, `decision` (`approve` \| `reject`), `reviewer`, `auth_method`, `summary`, `reviewed_proposal_sha256`, `reviewed_evaluation_digest`, `resulting_version_id` | A proposal is decided once |
 | `runs.strategy_version_ref` (0005) | FK → `strategy_versions`, NULL for older runs and unregistered strategies | Which registered version a run used |
+| `experiments` (0006) | `id`, `account_id`, `strategy_id`, `base_version_id` → `strategy_versions`, `factor` (`hook_type` \| `length`), `synthetic`, `design` (JSONB), `design_sha256`, `snapshot_age_seconds`, `status` (CHECK), `peeked`, `stop_reason`, `created_by`, `auth_method`, lifecycle timestamps | Status: `draft`, `approved`, `running`, `stopped`, `concluded`, `cancelled`. Partial UNIQUE index on `account_id` WHERE status IN (`approved`, `running`). Trigger `trg_experiments_design_frozen` rejects `DELETE` and any change to the pre-registered columns |
+| `experiment_arms` (0006) | `id`, `experiment_id`, `label`, `position`, `is_control`, `treatment` (JSONB) | UNIQUE (`experiment_id`, `label`) and (`experiment_id`, `position`); append-only |
+| `experiment_assignments` (0006) | `id`, `experiment_id`, `arm_id`, `run_id` UNIQUE → `runs`, `block_no`, `position`, `assigned_by`, `auth_method`, `assigned_at` | UNIQUE (`experiment_id`, `block_no`, `position`): one slot of a permuted block per run; append-only |
+| `experiment_events` (0006) | `id`, `experiment_id`, `kind`, `actor`, `auth_method`, `reason`, `detail`, `created_at` | Audit trail of lifecycle actions, including unblinding; append-only |
+| `experiment_results` (0006) | `id`, `experiment_id` UNIQUE, `verdict`, `evidence_class`, `peeked`, `cutoff`, `analysis_version`, `input_digest`, `digest`, `analysis` (JSONB), `flags`, `concluded_by`, `auth_method` | One immutable result per experiment; append-only |
+| `strategy_versions.source_experiment_result_id` (0006) | FK → `experiment_results`, UNIQUE, NULL except origin `experiment` | A result is adopted at most once |
 | `post_metrics` (0004) | `id`, `job_id` UNIQUE, UNIQUE (`publication_id`, `snapshot_age`), `request_id`, `platform`, `provider`, `metrics_scope`, `provider_post_id`, `snapshot_age`, `target_age_seconds`, `scheduled_for`, `captured_at`, `provider_created_at`, `recorded_published_at`, `likes`, `reposts`, `replies`, `quotes`, `bookmarks`, `impressions` | Immutable observations. A count is NULL when the platform did not return it, 0 only when it returned 0. No raw provider JSON |
 
 The provenance chain is a plain join:
@@ -92,7 +98,15 @@ tables and `runs.strategy_version_ref` (NULL for existing runs), and a trigger f
 changes no behaviour of existing runs. All apply to
 an existing database and to a fresh one (`sga-db upgrade`). A DB test upgrades a populated `0001` database
 and checks the existing rows survive, and another compares the migrated schema against the
-SQLAlchemy models; a third upgrades a populated `0004` database to `0005`.
+SQLAlchemy models; a third upgrades a populated `0004` database to `0005`, and a fourth a
+populated `0005` database to `0006`.
+
+`0006` adds the five experiment tables, `strategy_versions.source_experiment_result_id`
+(NULL for existing rows) and `experiment` to the allowed version origins. Arms, assignments,
+events and results reuse `sga_reject_mutation`; a new function `sga_freeze_experiment_design`
+protects the pre-registered columns of `experiments`. It starts no experiment and changes no
+existing run. Downgrading `0006` fails while a version with origin `experiment` exists,
+because the narrowed origin check would reject it; such versions must be handled by hand.
 
 ## Resume
 

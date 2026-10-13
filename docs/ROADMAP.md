@@ -104,12 +104,33 @@ Not done in Phase 7 (deliberate): no automatic strategy change or activation, no
 pillars, tone, audience or posting time, no significance tests or causal claims, no
 reviewer identities (one shared token).
 
-## Phase 8: Experiments and A/B testing
-- `Experiment` lifecycle: hypothesis, variants, assignment, significance-aware conclusion.
-- Start from an approved Phase 7 proposal: its hypothesis becomes the experiment, with
-  randomized assignment of hook or length per run so time and topic stop confounding the
-  comparison.
-- **Exit:** at least one experiment runs to a conclusion that updates strategy.
+## Phase 8: Experiments and A/B testing (done)
+- Pre-registered experiments (`POST /experiments`, review token): factor (hook type or
+  length range), 2 or 3 arms, primary metric, planned posts per arm, snapshot age, maximum
+  duration, stopping rules and attrition threshold, fixed before any assignment. The base
+  strategy version is pinned; the design is frozen by a database trigger.
+- Randomized assignment per run (permuted blocks, `SELECT ... FOR UPDATE`, unique slot and
+  run constraints); run and assignment are written in one transaction. The arm is a hard
+  rule in the run's content policy; an informational heuristic estimates whether the post
+  actually uses the declared hook.
+- Full funnel per arm (assigned, generated, reviewed, approved, published, eligible),
+  balance and adherence; age-matched pooled-rate difference with a percentile bootstrap
+  interval, median difference as a secondary estimate. Outcomes masked until conclusion;
+  early unblinding is explicit, irreversible and makes the verdict exploratory. Results are
+  immutable and reproducible from their input digest.
+- Adoption (review token) of a confirmatory result on real data creates an inactive version
+  (origin `experiment`); activation stays the Phase 7 step. Synthetic results never adopt.
+- Feasibility tables (5 posts/week planning assumption), per-arm usage with labelled
+  estimates and unknown prices, a compact evidence digest for the Strategy Agent
+  (`strategy-v2`). Migration `0006`. See [EXPERIMENTS.md](EXPERIMENTS.md).
+- **Exit:** met in code and on synthetic data: an experiment runs to a stored conclusion
+  and, when confirmatory on real data, can be adopted into a strategy version. Not yet
+  shown on real data: at 5 posts a week a two-arm experiment with 50 posts per arm needs
+  about 25 weeks, beyond the default 120-day maximum.
+
+Not done in Phase 8 (deliberate): no sequential or Bayesian testing, no multi-factor
+designs, no automatic start, stop, adoption, activation or publishing, no posting-time
+experiments, no reviewer identities (one shared token).
 
 ## Phase 9: Dashboard
 - Next.js UI: review queue, run traces, performance and experiment views.

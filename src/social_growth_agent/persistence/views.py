@@ -14,6 +14,18 @@ from social_growth_agent.models import (
     PublicationStatus,
     RunStatus,
 )
+from social_growth_agent.models.experiment import (
+    EvidenceClass,
+    ExperimentDesign,
+    ExperimentEventKind,
+    ExperimentFactor,
+    ExperimentStatus,
+    Feasibility,
+    ResultFlag,
+    StopReason,
+    Treatment,
+    Verdict,
+)
 from social_growth_agent.models.strategy import (
     DecisionKind,
     EvaluationStatus,
@@ -424,6 +436,8 @@ class StrategyVersionView(View):
     note: str | None
     created_at: datetime
     active: bool
+    source_experiment_result_id: str | None = None
+    """Phase 8: the concluded experiment result this version was adopted from."""
 
 
 class ActivationView(View):
@@ -499,6 +513,156 @@ class ProposalView(View):
     note: str = (
         "Proposed changes are hypotheses from observational data. Approving creates a new "
         "strategy version; it does not activate it, publish anything or start a run."
+    )
+
+
+# --- experiments (Phase 8) ----------------------------------------------------------------
+
+
+class ExperimentArmView(View):
+    id: str
+    label: str
+    position: int
+    is_control: bool
+    treatment: Treatment
+    description: str
+
+
+class ExperimentEventView(View):
+    id: str
+    kind: ExperimentEventKind
+    actor: str
+    auth_method: str
+    reason: str | None
+    detail: dict[str, Any] | None
+    created_at: datetime
+
+
+class ExperimentResultView(View):
+    """The immutable conclusion. ``adoptable`` is false unless the verdict is a
+    confirmatory ``favours_variant`` on real data; ``adoption_blockers`` says why not."""
+
+    id: str
+    verdict: Verdict
+    evidence_class: EvidenceClass
+    peeked: bool
+    cutoff: datetime
+    analysis_version: str
+    input_digest: str
+    digest: str
+    flags: list[ResultFlag]
+    concluded_by: str
+    auth_method: str
+    created_at: datetime
+    adoptable: bool
+    adoption_blockers: list[str]
+    adopted_version_id: str | None
+
+
+class ExperimentView(View):
+    id: str
+    account_id: str
+    strategy_id: str
+    base_version_id: str
+    factor: ExperimentFactor
+    synthetic: bool
+    design: ExperimentDesign
+    design_sha256: str
+    snapshot_age_seconds: int
+    status: ExperimentStatus
+    peeked: bool
+    stop_reason: StopReason | None
+    created_by: str
+    auth_method: str
+    created_at: datetime
+    approved_at: datetime | None
+    started_at: datetime | None
+    stopped_at: datetime | None
+    unblinded_at: datetime | None
+    concluded_at: datetime | None
+    cancelled_at: datetime | None
+    planned_end_at: datetime | None
+    """``started_at`` plus the pre-registered maximum duration."""
+    arms: list[ExperimentArmView]
+    assigned_per_arm: dict[str, int]
+    """Assignment counts only (not outcomes): needed to run the experiment."""
+    runs_cap_per_arm: int
+    feasibility: Feasibility
+    result: ExperimentResultView | None
+    events: list[ExperimentEventView]
+    note: str = (
+        "Experiments never publish, adopt or activate anything on their own. Outcome "
+        "summaries are masked while the experiment is open; see the analysis for exactly "
+        "which fields, and for what remains visible through other endpoints."
+    )
+
+
+class AssignmentView(View):
+    id: str
+    arm: str
+    run_id: str
+    block_no: int
+    position: int
+    assigned_by: str
+    auth_method: str
+    assigned_at: datetime
+
+
+class ExperimentRunCreated(View):
+    assignment: AssignmentView
+    run: RunSummary
+
+
+class LineageEntryView(View):
+    """experiment -> arm -> run -> candidates -> publications -> snapshots (ids only)."""
+
+    assignment_id: str
+    arm: str
+    run_id: str
+    candidate_ids: list[str]
+    publication_ids: list[str]
+    post_metric_ids: list[str]
+
+
+class ExperimentLineageView(View):
+    experiment_id: str
+    base_version_id: str
+    entries: list[LineageEntryView]
+    adopted_version_id: str | None
+
+
+class ArmUsageView(View):
+    arm: str
+    runs: int
+    usage: UsageCounts
+    at_run_pricing_total: Decimal | None
+    """Sum of each run's estimate at its own stored pricing; None unless all are known."""
+    run_pricing_missing: list[str]
+
+
+class ProjectedCostView(View):
+    remaining_runs: int
+    """Up to the assignment cap of every arm."""
+    runs_with_usage: int
+    mean_cost_per_run: Decimal | None
+    projected_remaining: Decimal | None
+    missing_prices: list[str]
+    basis: str = (
+        "Mean of this experiment's finished runs at current pricing, times the runs still "
+        "allowed by the cap. None when no run has finished or any price is unknown."
+    )
+
+
+class ExperimentUsageView(View):
+    experiment_id: str
+    per_arm: list[ArmUsageView]
+    usage: UsageCounts
+    at_current_pricing: CostEstimate
+    projected: ProjectedCostView
+    note: str = (
+        "Estimates from canonical usage counts and the configured price lists; not invoices. "
+        "Unknown prices are listed under missing_prices and never assumed to be zero. "
+        "Analytics request counts are an upper bound when summed across runs."
     )
 
 

@@ -20,6 +20,13 @@ from stored snapshots (no platform or model call). ``POST /evaluations/{id}/prop
 is the only endpoint that calls a model, and only when STRATEGY_PROPOSER is enabled.
 Approve, reject, activate and register need the review token. Approval creates a version
 and never activates it; activation is its own request. No read endpoint writes anything.
+
+Experiments (Phase 8): every mutation, including ``POST /experiments/{id}/runs`` (which
+starts a run and so may spend on model and research calls), needs the review token.
+Experiment runs are reviewed and published exactly like other runs: explicitly, by a
+human. No experiment endpoint publishes, adopts or activates anything on its own; adopt
+creates an inactive version only. ``GET .../analysis`` masks outcome summaries while
+the experiment is open and never writes.
 """
 
 from collections.abc import AsyncIterator
@@ -30,6 +37,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 
 from social_growth_agent import __version__
+from social_growth_agent.analytics.feasibility import feasibility
 from social_growth_agent.api.errors import PersistenceNotConfiguredError, install_error_handlers
 from social_growth_agent.api.schemas import (
     ActivateBody,
@@ -46,12 +54,23 @@ from social_growth_agent.api.schemas import (
 )
 from social_growth_agent.config import AppSettings
 from social_growth_agent.models import AnalyticsJobStatus, PublicationStatus, RunStatus
+from social_growth_agent.models.experiment import (
+    ExperimentAnalysis,
+    ExperimentDesign,
+    ExperimentStatus,
+    Feasibility,
+)
 from social_growth_agent.models.strategy import Observation, ProposalStatus, ReviewAuthMethod
 from social_growth_agent.persistence.views import (
     ActiveStrategyView,
     AnalyticsJobView,
+    AssignmentView,
     EvaluationCreated,
     EvaluationView,
+    ExperimentLineageView,
+    ExperimentRunCreated,
+    ExperimentUsageView,
+    ExperimentView,
     LineageView,
     MetricSnapshotView,
     PendingReview,
@@ -66,6 +85,15 @@ from social_growth_agent.persistence.views import (
 )
 from social_growth_agent.services.analytics import AnalyticsService, BackfillResult
 from social_growth_agent.services.evaluations import EvaluationRequest, EvaluationService
+from social_growth_agent.services.experiments import (
+    AdoptBody,
+    CreateExperimentBody,
+    ExperimentActionBody,
+    ExperimentRunBody,
+    ExperimentService,
+    StopExperimentBody,
+    UnblindBody,
+)
 from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.runs import RunService
 from social_growth_agent.services.runtime import Runtime, build_runtime
@@ -114,6 +142,13 @@ def _strategy_service(request: Request) -> StrategyService:
     return service
 
 
+def _experiment_service(request: Request) -> ExperimentService:
+    service = _runtime(request).experiments
+    if service is None:
+        raise PersistenceNotConfiguredError("experiments are not configured")
+    return service
+
+
 def _review_auth(
     request: Request, authorization: Annotated[str | None, Header()] = None
 ) -> ReviewAuthMethod:
@@ -132,6 +167,7 @@ AnalyticsServiceDep = Annotated[AnalyticsService, Depends(_analytics_service)]
 PublicationServiceDep = Annotated[PublicationService, Depends(_publication_service)]
 EvaluationServiceDep = Annotated[EvaluationService, Depends(_evaluation_service)]
 StrategyServiceDep = Annotated[StrategyService, Depends(_strategy_service)]
+ExperimentServiceDep = Annotated[ExperimentService, Depends(_experiment_service)]
 ReviewAuthDep = Annotated[ReviewAuthMethod, Depends(_review_auth)]
 
 
@@ -465,5 +501,138 @@ def create_app(settings: AppSettings | None = None, runtime: Runtime | None = No
     @app.get("/accounts/{account_id}/active-strategy")
     def active_strategy(account_id: str, strategies: StrategyServiceDep) -> ActiveStrategyView:
         return strategies.active(account_id)
+
+    # --- experiments (Phase 8) -----------------------------------------------------
+
+    @app.post("/experiments/feasibility")
+    def experiment_feasibility(design: ExperimentDesign) -> Feasibility:
+        """Planning arithmetic for a design (pure: stores nothing, calls nothing)."""
+        return feasibility(design)
+
+    @app.post("/experiments", status_code=status.HTTP_201_CREATED)
+    def create_experiment(
+        body: CreateExperimentBody, auth: ReviewAuthDep, experiments: ExperimentServiceDep
+    ) -> ExperimentView:
+        """A draft with its full pre-registration, pinned to the active strategy version.
+        The design cannot be changed afterwards."""
+        return experiments.create(body, auth=auth)
+
+    @app.get("/experiments")
+    def list_experiments(
+        experiments: ExperimentServiceDep,
+        account_id: Annotated[str | None, Query(max_length=64)] = None,
+        experiment_status: Annotated[ExperimentStatus | None, Query(alias="status")] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> list[ExperimentView]:
+        return experiments.list_experiments(
+            account_id=account_id, status=experiment_status, limit=limit
+        )
+
+    @app.get("/experiments/{experiment_id}")
+    def get_experiment(experiment_id: str, experiments: ExperimentServiceDep) -> ExperimentView:
+        return experiments.get(experiment_id)
+
+    @app.post("/experiments/{experiment_id}/approve")
+    def approve_experiment(
+        experiment_id: str,
+        body: ExperimentActionBody,
+        auth: ReviewAuthDep,
+        experiments: ExperimentServiceDep,
+    ) -> ExperimentView:
+        """409 if another experiment is approved or running for the account."""
+        return experiments.approve(experiment_id, body, auth=auth)
+
+    @app.post("/experiments/{experiment_id}/start")
+    def start_experiment(
+        experiment_id: str,
+        body: ExperimentActionBody,
+        auth: ReviewAuthDep,
+        experiments: ExperimentServiceDep,
+    ) -> ExperimentView:
+        return experiments.start(experiment_id, body, auth=auth)
+
+    @app.post("/experiments/{experiment_id}/stop")
+    def stop_experiment(
+        experiment_id: str,
+        body: StopExperimentBody,
+        auth: ReviewAuthDep,
+        experiments: ExperimentServiceDep,
+    ) -> ExperimentView:
+        """Ends new assignments. Does not shorten the analysis plan."""
+        return experiments.stop(experiment_id, body, auth=auth)
+
+    @app.post("/experiments/{experiment_id}/cancel")
+    def cancel_experiment(
+        experiment_id: str,
+        body: ExperimentActionBody,
+        auth: ReviewAuthDep,
+        experiments: ExperimentServiceDep,
+    ) -> ExperimentView:
+        return experiments.cancel(experiment_id, body, auth=auth)
+
+    @app.post("/experiments/{experiment_id}/unblind")
+    def unblind_experiment(
+        experiment_id: str,
+        body: UnblindBody,
+        auth: ReviewAuthDep,
+        experiments: ExperimentServiceDep,
+    ) -> ExperimentView:
+        """Irreversible: every later conclusion is exploratory and not adoptable."""
+        return experiments.unblind(experiment_id, body, auth=auth)
+
+    @app.post("/experiments/{experiment_id}/runs", status_code=status.HTTP_202_ACCEPTED)
+    def create_experiment_run(
+        experiment_id: str,
+        body: ExperimentRunBody,
+        auth: ReviewAuthDep,
+        experiments: ExperimentServiceDep,
+    ) -> ExperimentRunCreated:
+        """Randomize and start a run (it may call models and the research provider).
+        Review and publishing stay explicit human steps."""
+        return experiments.create_run(experiment_id, body, auth=auth)
+
+    @app.get("/experiments/{experiment_id}/assignments")
+    def experiment_assignments(
+        experiment_id: str, experiments: ExperimentServiceDep
+    ) -> list[AssignmentView]:
+        return experiments.assignments(experiment_id)
+
+    @app.get("/experiments/{experiment_id}/analysis")
+    def experiment_analysis(
+        experiment_id: str, experiments: ExperimentServiceDep
+    ) -> ExperimentAnalysis:
+        """Read-only. Funnel, balance and adherence always; outcome summaries only once
+        unblinded or concluded (``masked_fields`` lists what is withheld)."""
+        return experiments.analysis(experiment_id)
+
+    @app.post("/experiments/{experiment_id}/conclude")
+    def conclude_experiment(
+        experiment_id: str,
+        body: ExperimentActionBody,
+        auth: ReviewAuthDep,
+        experiments: ExperimentServiceDep,
+    ) -> ExperimentView:
+        """Stores the immutable result (idempotent)."""
+        return experiments.conclude(experiment_id, body, auth=auth)
+
+    @app.post("/experiments/{experiment_id}/adopt", status_code=status.HTTP_201_CREATED)
+    def adopt_experiment(
+        experiment_id: str, body: AdoptBody, auth: ReviewAuthDep, experiments: ExperimentServiceDep
+    ) -> StrategyVersionView:
+        """A new inactive strategy version from a confirmatory favours_variant on real
+        data. Activation is a separate request (POST /strategies/{id}/activate)."""
+        return experiments.adopt(experiment_id, body, auth=auth)
+
+    @app.get("/experiments/{experiment_id}/lineage")
+    def experiment_lineage(
+        experiment_id: str, experiments: ExperimentServiceDep
+    ) -> ExperimentLineageView:
+        return experiments.lineage(experiment_id)
+
+    @app.get("/experiments/{experiment_id}/usage")
+    def experiment_usage(
+        experiment_id: str, experiments: ExperimentServiceDep
+    ) -> ExperimentUsageView:
+        return experiments.usage(experiment_id)
 
     return app
