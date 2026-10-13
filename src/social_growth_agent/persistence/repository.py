@@ -136,6 +136,7 @@ def summary(row: RunRow) -> RunSummary:
         research_query=row.research_query,
         strategy_id=row.strategy_id,
         strategy_version=row.strategy_version,
+        strategy_version_ref=row.strategy_version_ref,
         research_attempts=row.research_attempts,
         generation_attempts=row.generation_attempts,
         regeneration_rounds=row.regeneration_rounds,

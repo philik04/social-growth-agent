@@ -116,6 +116,62 @@ class AppSettings(BaseSettings):
     analytics_backoff_base_seconds: int = Field(default=60, ge=1, le=86_400)
     analytics_backoff_max_seconds: int = Field(default=3600, ge=1, le=7 * 86_400)
 
+    # --- strategy evaluation (Phase 7) ---------------------------------------------------
+    app_environment: Literal["development", "production"] = Field(
+        default="production",
+        description="'development' is required before unauthenticated strategy review can "
+        "be enabled. Nothing else changes with it.",
+    )
+    strategy_review_token: SecretStr | None = Field(
+        default=None,
+        description="Bearer token for approving, rejecting, activating and registering "
+        "strategy versions. Proves possession of the token, not who the reviewer is.",
+    )
+    strategy_review_allow_unauthenticated: bool = Field(
+        default=False,
+        description="Local development only: allow strategy review without a token when "
+        "STRATEGY_REVIEW_TOKEN is unset. Requires APP_ENVIRONMENT=development; decisions "
+        "are recorded with auth_method 'unauthenticated_local'.",
+    )
+    strategy_proposer: Literal["disabled", "fake", "openai"] = Field(
+        default="disabled",
+        description="Who drafts strategy proposals. 'disabled' (default) never calls a model; "
+        "'openai' uses OPENAI_API_KEY and STRATEGY_LLM_MODEL. Never a silent fallback.",
+    )
+    strategy_llm_model: str | None = Field(
+        default=None, description="Model for strategy proposals; defaults to OPENAI_MODEL."
+    )
+    eval_min_group_n: int = Field(default=5, ge=3, le=1000)
+    eval_min_compare_n: int = Field(default=10, ge=5, le=1000)
+    eval_min_total_n: int = Field(default=20, ge=10, le=10_000)
+    eval_hour_block_hours: Literal[1, 2, 3, 4, 6, 8, 12, 24] = 4
+    eval_length_bucket_edges: str = Field(
+        default="100,200", description="Comma-separated upper edges of the length buckets."
+    )
+
+    @model_validator(mode="after")
+    def _strategy_review_is_safe(self) -> Self:
+        if self.strategy_review_allow_unauthenticated and self.app_environment != "development":
+            raise ValueError(
+                "STRATEGY_REVIEW_ALLOW_UNAUTHENTICATED requires APP_ENVIRONMENT=development"
+            )
+        token = self.strategy_review_token
+        if token is not None and len(token.get_secret_value().strip()) < 16:
+            raise ValueError("STRATEGY_REVIEW_TOKEN must be at least 16 characters")
+        if self.eval_min_compare_n < self.eval_min_group_n:
+            raise ValueError("EVAL_MIN_COMPARE_N must be at least EVAL_MIN_GROUP_N")
+        self.length_bucket_edges()  # raises ValueError if invalid
+        return self
+
+    def length_bucket_edges(self) -> tuple[int, ...]:
+        try:
+            edges = tuple(int(p) for p in self.eval_length_bucket_edges.split(",") if p.strip())
+        except ValueError:
+            raise ValueError("EVAL_LENGTH_BUCKET_EDGES must be comma-separated integers") from None
+        if any(e < 1 for e in edges) or list(edges) != sorted(set(edges)) or len(edges) > 10:
+            raise ValueError("EVAL_LENGTH_BUCKET_EDGES must be 1-10 increasing positive integers")
+        return edges
+
     @model_validator(mode="after")
     def _analytics_settings_are_consistent(self) -> Self:
         from social_growth_agent.policies.analytics import parse_snapshot_ages

@@ -33,14 +33,13 @@ from social_growth_agent.errors import AnalyticsError, SocialGrowthError
 from social_growth_agent.models import AnalyticsFetch, PublicationStatus, utc_now
 from social_growth_agent.persistence import Database
 from social_growth_agent.persistence import analytics as adb
-from social_growth_agent.persistence.migrate import current_revision
+from social_growth_agent.persistence.migrate import current_revision, head_revision
 from social_growth_agent.persistence.tables import PublicationRow
 from social_growth_agent.providers.x import XAnalyticsProvider
 from social_growth_agent.services.analytics import AnalyticsService
 from social_growth_agent.services.runtime import build_analytics_worker
 
 GATE_ENV = "RUN_LIVE_X_ANALYTICS_TESTS"
-HEAD_REVISION = "0004"
 _COUNTS = ("likes", "reposts", "replies", "quotes", "bookmarks", "impressions")
 
 
@@ -69,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     url = settings.database_url.get_secret_value()
     revision = current_revision(url)
-    if revision != HEAD_REVISION:
+    if revision != head_revision():
         print(f"the database is at revision {revision}; run `sga-db upgrade` first")
         return 2
 

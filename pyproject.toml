@@ -23,6 +23,7 @@ dependencies = [
 sga-db = "social_growth_agent.persistence.cli:main"
 sga-publisher-worker = "social_growth_agent.services.publisher_cli:main"
 sga-analytics-worker = "social_growth_agent.services.analytics_cli:main"
+sga-strategy = "social_growth_agent.services.strategy_cli:main"
 
 [dependency-groups]
 dev = [

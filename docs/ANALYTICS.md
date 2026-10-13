@@ -3,7 +3,9 @@
 Phase 6 collects **observed public metrics** of the posts this application published, at
 fixed ages after each post (by default 1h, 24h and 72h), and joins every observation back
 to the research, candidate, critique, approval and strategy that produced the post. It
-does not interpret the numbers and does not change any strategy: that is Phase 7.
+does not interpret the numbers and does not change any strategy. Phase 7 reads these
+snapshots, never X, to build deterministic evaluations and human-approved strategy
+proposals: see [STRATEGY_EVALUATION.md](STRATEGY_EVALUATION.md).
 
 No LLM is involved anywhere here. Whether and when a snapshot is taken is decided by
 the job table and a deterministic retry policy; reading metrics is a single HTTP call.
@@ -226,3 +228,12 @@ the normal worker path for that publication's due jobs only. The optional live t
 (`RUN_LIVE_X_ANALYTICS_TESTS=1 X_BEARER_TOKEN=... X_ANALYTICS_LIVE_POST_ID=<id> uv run
 pytest -m live tests/live/test_x_analytics_live.py`) makes the same single read without a
 database.
+
+## Use in Phase 7
+
+Evaluations compare posts at one snapshot age and use a snapshot only if it is on target
+(`max(120 s, 10 %)` of the age, from the snapshot's own `provider_created_at`); late, early,
+missing and not-yet-due snapshots are listed as excluded with a reason. Snapshots from the
+mock provider (`provider = mock_analytics`) are synthetic and never enter a real
+evaluation, and real ones never enter a synthetic evaluation. NULL counts stay NULL. See
+[STRATEGY_EVALUATION.md](STRATEGY_EVALUATION.md).

@@ -21,8 +21,9 @@ from social_growth_agent.agents.research import (
     ResearchReport,
     ResearchResult,
 )
+from social_growth_agent.agents.strategy import StrategyAgent, StrategyProposalDraft
 
-LLM_OUTPUT_SCHEMAS = (ResearchReport, CandidateBatch, CriticReport)
+LLM_OUTPUT_SCHEMAS = (ResearchReport, CandidateBatch, CriticReport, StrategyProposalDraft)
 
 __all__ = [
     "LLM_OUTPUT_SCHEMAS",
@@ -41,4 +42,6 @@ __all__ = [
     "ResearchAgent",
     "ResearchReport",
     "ResearchResult",
+    "StrategyAgent",
+    "StrategyProposalDraft",
 ]

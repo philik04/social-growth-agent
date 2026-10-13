@@ -10,7 +10,7 @@ from pydantic import SecretStr
 
 from social_growth_agent.errors import AnalyticsError
 from social_growth_agent.models import AnalyticsFailureCategory
-from social_growth_agent.persistence.migrate import alembic_config, current_revision, upgrade
+from social_growth_agent.persistence.migrate import alembic_config, current_revision
 from social_growth_agent.providers.mocks import MockAnalyticsProvider
 from social_growth_agent.providers.x import XAnalyticsProvider
 from social_growth_agent.providers.x.client import XApiClient
@@ -339,7 +339,7 @@ def test_0004_applies_to_a_populated_phase_5_database_without_scheduling_anythin
             "'2026-10-05T10:00:00Z') RETURNING id",
         )
 
-        upgrade(url)  # 0003 -> 0004
+        command.upgrade(alembic_config(url), "0004")  # 0003 -> 0004 only
 
         assert current_revision(url) == "0004"
         assert sql(

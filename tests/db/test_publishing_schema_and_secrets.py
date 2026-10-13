@@ -185,9 +185,9 @@ def test_0002_applies_to_a_populated_phase_4_database(base_database_url, run_pay
             "'philipp', now()) RETURNING id",
         )
 
-        upgrade(url)  # 0001 -> head (0002, 0003) on the populated database
+        upgrade(url)  # 0001 -> head (0002-0005) on the populated database
 
-        assert current_revision(url) == "0004"
+        assert current_revision(url) == "0005"
         assert sql(url, "SELECT status FROM runs WHERE id = 'run_legacy'") == [("approved",)]
         assert sql(
             url, "SELECT reviewed_candidate_ids FROM review_decisions WHERE id = 'dec_legacy'"

@@ -1,13 +1,28 @@
 """Read models: what the API returns about runs. Built from the domain tables only."""
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from social_growth_agent.accounting import CostEstimate, UsageCounts
 from social_growth_agent.analytics import ObservedRates
-from social_growth_agent.models import AnalyticsJobStatus, PublicationStatus, RunStatus
+from social_growth_agent.models import (
+    AnalyticsJobStatus,
+    ContentStrategy,
+    PublicationStatus,
+    RunStatus,
+)
+from social_growth_agent.models.strategy import (
+    DecisionKind,
+    EvaluationStatus,
+    EvaluationSummary,
+    ProposalOutcome,
+    ProposalStatus,
+    StrategyVersionOrigin,
+    ValidatedProposal,
+)
 
 
 class View(BaseModel):
@@ -27,6 +42,9 @@ class RunSummary(View):
     research_query: str
     strategy_id: str
     strategy_version: int
+    strategy_version_ref: str | None = None
+    """The registered strategy version this run used (Phase 7); None for unregistered
+    inline strategies and older runs."""
     research_attempts: int
     generation_attempts: int
     regeneration_rounds: int
@@ -336,6 +354,151 @@ class UsageReport(View):
     note: str = (
         "Costs are estimates from canonical usage counts and a configured price list; "
         "they are not invoices."
+    )
+
+
+# --- strategy evaluation (Phase 7) ----------------------------------------------------------
+
+
+class EvaluationUsageView(View):
+    """What the proposals made from one evaluation spent. The evaluation itself never
+    calls a model or a platform. Every proposal counts, including failed and abandoned
+    ones: they spent tokens too. Each proposal snapshots its own price list, so the
+    proposal-pricing figure is a sum of per-proposal totals, not one estimate."""
+
+    proposals: int
+    usage: UsageCounts
+    at_current_pricing: CostEstimate
+    at_proposal_pricing_total: Decimal | None
+    """Sum of each proposal's estimate at its own pricing; None unless all are known."""
+    proposal_pricing_missing: list[str]
+    note: str = "Estimates from the reported token counts; not invoices."
+
+
+class EvaluationView(View):
+    id: str
+    account_id: str
+    strategy_id: str | None
+    snapshot_age: str
+    published_since: datetime | None
+    published_until: datetime | None
+    data_cutoff: datetime
+    synthetic: bool
+    config: dict[str, Any]
+    config_version: str
+    input_digest: str
+    digest: str
+    status: EvaluationStatus
+    eligible_count: int
+    excluded_count: int
+    posts_considered: int
+    snapshots_used: int
+    platform_reads: int = 0
+    """Evaluations read only stored snapshots: never a platform call."""
+    llm_calls: int = 0
+    """Evaluations never call a model; proposals are separate, explicit requests."""
+    summary: EvaluationSummary
+    created_by: str | None
+    created_at: datetime
+    proposal_ids: list[str]
+    usage: EvaluationUsageView
+
+
+class EvaluationCreated(View):
+    created: bool
+    """False when an identical request already produced this evaluation."""
+    evaluation: EvaluationView
+
+
+class StrategyVersionView(View):
+    id: str
+    strategy_id: str
+    account_id: str
+    version: int
+    content: ContentStrategy
+    content_sha256: str
+    parent_version_id: str | None
+    origin: StrategyVersionOrigin
+    created_by: str | None
+    auth_method: str | None
+    note: str | None
+    created_at: datetime
+    active: bool
+
+
+class ActivationView(View):
+    id: str
+    account_id: str
+    seq: int
+    strategy_version_id: str
+    previous_version_id: str | None
+    activated_by: str
+    auth_method: str
+    note: str | None
+    activated_at: datetime
+
+
+class StrategyHistoryView(View):
+    strategy_id: str
+    versions: list[StrategyVersionView]
+    activations: list[ActivationView]
+
+
+class ActiveStrategyView(View):
+    account_id: str
+    version: StrategyVersionView
+    activation: ActivationView
+
+
+class ProposalDecisionView(View):
+    id: str
+    decision: DecisionKind
+    reviewer: str
+    auth_method: str
+    summary: str
+    reviewed_proposal_sha256: str | None
+    reviewed_evaluation_digest: str | None
+    resulting_version_id: str | None
+    decided_at: datetime
+
+
+class ProposalUsageView(View):
+    usage: UsageCounts
+    at_proposal_pricing: CostEstimate
+    at_current_pricing: CostEstimate
+    note: str = "Estimates from the reported token counts; not invoices."
+
+
+class ProposalView(View):
+    id: str
+    evaluation_id: str
+    evaluation_digest: str
+    account_id: str
+    base_version_id: str
+    status: ProposalStatus
+    stale: bool
+    """A ``generating`` proposal older than twice the model timeout: its process most
+    likely died. Shown here only; an explicit retry closes it."""
+    outcome: ProposalOutcome | None
+    proposer: str
+    provider: str
+    model: str
+    prompt_version: str
+    proposal: ValidatedProposal | None
+    proposal_sha256: str | None
+    validation_errors: list[str] | None
+    error_type: str | None
+    error_message: str | None
+    retry_of: str | None
+    requested_by: str | None
+    started_at: datetime
+    finished_at: datetime | None
+    latency_ms: float | None
+    decision: ProposalDecisionView | None
+    usage: ProposalUsageView
+    note: str = (
+        "Proposed changes are hypotheses from observational data. Approving creates a new "
+        "strategy version; it does not activate it, publish anything or start a run."
     )
 
 

@@ -81,13 +81,34 @@ token store), no analytics.
 Not done in Phase 6 (deliberate): private metrics (user-context auth), media view counts,
 interpretation of the numbers, any automatic strategy change.
 
-## Phase 7: Strategy-learning feedback loop
-- Analytics Agent derives `PerformanceInsight`s (hook type, topic, format, length, posting window).
-- Strategy Agent proposes a new `ContentStrategy` version, and a human approves the change.
-- **Exit:** new runs use the updated strategy, and results are attributable to the strategy version.
+## Phase 7: Strategy evaluation and human-approved proposals (done)
+- Deterministic, age-matched evaluations over `post_metrics` (`POST /evaluations`): eligible
+  vs excluded posts with reasons, groups by hook type, strategy version, length, UTC hour
+  block, origin and format, descriptive statistics with explicit evidence levels and
+  "not causal" comparisons. Synthetic (`mock_analytics`) and real metrics never mix.
+  Immutable, reproducible evidence packages with a digest; no model and no platform call.
+- Opt-in Strategy Agent (`STRATEGY_PROPOSER`, default disabled) proposing changes to
+  `preferred_hooks` and `length_guidance` only, each citing comparisons of the evaluation and
+  validated in code (no invented evidence or numbers). Insufficient evidence gives a
+  `no_change` without a model call. One open proposal per account; explicit retry of failed
+  or stale proposals.
+- Immutable strategy versions; all-or-nothing approval (review token, digests of what the
+  reviewer saw) creates an inactive version; activation is a separate compare-and-set step;
+  runs record `strategy_version_ref`. Migration `0005`. See
+  [STRATEGY_EVALUATION.md](STRATEGY_EVALUATION.md).
+- **Exit:** met: new runs can use the approved, activated version, and their results are
+  attributable to it. Not yet shown on real data: a personal account needs weeks of posts
+  before any comparison reaches the default thresholds.
+
+Not done in Phase 7 (deliberate): no automatic strategy change or activation, no changes to
+pillars, tone, audience or posting time, no significance tests or causal claims, no
+reviewer identities (one shared token).
 
 ## Phase 8: Experiments and A/B testing
 - `Experiment` lifecycle: hypothesis, variants, assignment, significance-aware conclusion.
+- Start from an approved Phase 7 proposal: its hypothesis becomes the experiment, with
+  randomized assignment of hook or length per run so time and topic stop confounding the
+  comparison.
 - **Exit:** at least one experiment runs to a conclusion that updates strategy.
 
 ## Phase 9: Dashboard

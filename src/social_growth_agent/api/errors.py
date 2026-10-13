@@ -5,12 +5,16 @@ from fastapi.responses import JSONResponse
 
 from social_growth_agent.errors import (
     DatabaseUnavailableError,
+    InvalidEvaluationRequestError,
     InvalidReviewError,
     InvalidRunStateError,
     InvalidScheduleError,
     ProviderError,
     PublicationExistsError,
     ResourceNotFoundError,
+    ReviewAuthInvalidError,
+    ReviewAuthMissingError,
+    ReviewAuthNotConfiguredError,
     RunNotFoundError,
     SocialGrowthError,
 )
@@ -19,6 +23,10 @@ _STATUS: list[tuple[type[SocialGrowthError], int]] = [
     (RunNotFoundError, 404),
     (ResourceNotFoundError, 404),
     (InvalidScheduleError, 422),
+    (InvalidEvaluationRequestError, 422),
+    (ReviewAuthMissingError, 401),
+    (ReviewAuthInvalidError, 403),
+    (ReviewAuthNotConfiguredError, 503),
     (InvalidRunStateError, 409),
     (InvalidReviewError, 409),
     (DatabaseUnavailableError, 503),
@@ -44,6 +52,10 @@ def install_error_handlers(app: FastAPI) -> None:
                     "status": exc.status,
                 },
                 status_code=409,
+            )
+        if isinstance(exc, ReviewAuthMissingError):
+            return JSONResponse(
+                {"detail": str(exc)}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
             )
         for error_type, status in _STATUS:
             if isinstance(exc, error_type):

@@ -10,15 +10,21 @@ from social_growth_agent.models import Account, ContentStrategy, ReviewAction, R
 
 
 class CreateRunRequest(BaseModel):
+    """Either an inline ``strategy`` (as in Phases 1-6) or ``use_active_strategy: true``
+    (Phase 7: the account's activated version), never both."""
+
     model_config = ConfigDict(extra="forbid")
 
     account: Account
-    strategy: ContentStrategy
+    strategy: ContentStrategy | None = None
+    use_active_strategy: bool = False
     config: RunConfig = Field(default_factory=RunConfig)
 
     @model_validator(mode="after")
     def _strategy_belongs_to_account(self) -> Self:
-        if self.strategy.account_id != self.account.id:
+        if self.use_active_strategy == (self.strategy is not None):
+            raise ValueError("give either strategy or use_active_strategy: true")
+        if self.strategy is not None and self.strategy.account_id != self.account.id:
             raise ValueError("strategy.account_id must match account.id")
         return self
 
@@ -93,3 +99,51 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     database: str
+
+
+# --- strategy evaluation (Phase 7) ------------------------------------------------------
+
+
+class RequestProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requested_by: str | None = Field(default=None, max_length=128)
+
+
+class ApproveProposalBody(BaseModel):
+    """``proposal_sha256`` and ``evaluation_digest`` are the values the reviewer saw; the
+    approval is refused if either no longer matches the stored proposal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reviewer: str = Field(min_length=1, max_length=128)
+    summary: str = Field(min_length=1, max_length=1000)
+    proposal_sha256: str = Field(min_length=64, max_length=64)
+    evaluation_digest: str = Field(min_length=64, max_length=64)
+
+
+class RejectProposalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reviewer: str = Field(min_length=1, max_length=128)
+    summary: str = Field(min_length=1, max_length=1000)
+
+
+class RegisterVersionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: ContentStrategy
+    reviewer: str = Field(min_length=1, max_length=128)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ActivateBody(BaseModel):
+    """``expected_active_version_id`` is required (null when no version is active yet):
+    activation is compare-and-set against what the reviewer saw."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    expected_active_version_id: str | None = Field(max_length=64)
+    reviewer: str = Field(min_length=1, max_length=128)
+    note: str | None = Field(default=None, max_length=1000)

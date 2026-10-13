@@ -38,9 +38,10 @@ Strategy update  <-----------------  Analytics  <----------  Metrics collection
 
 Phases 1 to 4 implement research (from mock fixtures or live X) through human approval,
 Phase 5 publishing and Phase 6 metrics collection, both as workers over durable rows outside
-the graph. Analytics and strategy update (Phase 7) exist only in the types
-(`PerformanceInsight`, `Experiment`); `PublishState` and `PostMetrics` are deprecated Phase 1
-placeholders kept because stored checkpoints contain them.
+the graph. Phase 7 closes the loop outside the graph too: deterministic evaluations, an
+opt-in Strategy Agent proposal, human approval and a separate activation (section 8e).
+`PerformanceInsight` and `Experiment` remain unused types; `PublishState` and `PostMetrics`
+are deprecated Phase 1 placeholders kept because stored checkpoints contain them.
 
 ## 4. Agents and their contracts
 
@@ -55,6 +56,7 @@ the `LLMCall` record.
 | Research | `ResearchReport{topic, summary, findings[theme, summary, claim_type, evidence_source_ids, signal_strength], content_opportunities[angle, rationale, finding_indexes], confidence, limitations}` | `list[ResearchFinding]`, `ResearchBrief` | evidence ids ⊆ supplied `source_id`s; opportunity indexes valid; ≥1 finding; deterministic limitations appended by code (§8a) |
 | Content | `CandidateBatch{candidates[content, topic, hook_type, format, target_audience, research_finding_ids, rationale, revises_candidate_id]}` | `list[ContentCandidate]` | 1..count candidates; finding ids known; `revises_candidate_id` must be one of the previous attempt's critiqued candidates |
 | Critic | `CriticReport{evaluations[candidate_id, recommendation, score, tone_match, factual_risk, originality_risk, issues[category, detail], suggested_revision]}` | `list[Critique]` | exactly one evaluation per candidate; score 0..1; then hard policy |
+| Strategy (Phase 7, opt-in) | `StrategyProposalDraft{outcome, summary, changes[field, proposed_hooks, proposed_length, evidence_refs, expected_metric, expected_direction, confidence, rationale, limitations, confounders], posting_time_note, posting_time_evidence_refs}` | `ValidatedProposal` | allowlisted fields only; evidence ids exist in the evaluation and match the field; no numbers absent from the evaluation; `medium` confidence needs 2 × the minimum sample (§8e) |
 
 Prompts live in `agents/prompts/*.md`. Each has Role, Objective, Available inputs, Output
 contract, and Rules/Limitations. The research prompt states that the material is supplied by the
@@ -451,6 +453,35 @@ AnalyticsWorker (sga-analytics-worker)
 - **Derived metrics** (`analytics/derived.py`) are observational and NULL-propagating.
 - **No backfill on startup:** the worker never creates jobs, and migration 0004 creates none.
 
+## 8e. Strategy evaluation and proposals (Phase 7)
+
+Full detail in [STRATEGY_EVALUATION.md](STRATEGY_EVALUATION.md). Three steps, each explicit
+and each a separate request:
+
+```
+POST /evaluations           analytics/evaluation.py (pure)  -> performance_evaluations (immutable)
+POST /evaluations/{id}/proposals   StrategyAgent (opt-in) -> policies/strategy_changes.py
+                                    -> strategy_proposals (pending_review | failed)
+POST .../approve  (token)   new strategy_versions row, inactive
+POST /strategies/{id}/activate (token, compare-and-set) -> strategy_activations
+POST /runs {"use_active_strategy": true}             -> runs.strategy_version_ref
+```
+
+- **Code computes, the model only drafts.** All numbers come from the evaluation, which is
+  exact arithmetic over stored snapshots. The Strategy Agent sees aggregates and the current
+  strategy, never post text, and its draft is validated in code: allowlisted fields
+  (`preferred_hooks`, `length_guidance`), evidence ids that exist in that evaluation and
+  match the field, no numbers that are not in the evaluation.
+- **Soft preferences only.** Both fields guide the Content Agent; `ContentPolicy`, the critic
+  gate and reviewer notes always win.
+- **Humans decide twice.** Approval creates a version; activation is a separate,
+  compare-and-set step. Both need the review token and record the auth method. Nothing in
+  Phase 7 publishes or starts a run.
+- **Append-only by trigger.** Versions, activations, evaluations, observations and decisions
+  cannot be updated or deleted, even by direct SQL.
+- **Proposals are their own ledger**: committed as `generating` before the model call, at
+  most one open per account, with explicit retry of failed or stale ones.
+
 ## 9. Layering
 
 ```
@@ -460,6 +491,7 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
           |     \-> persistence (tables, recorder, ledgers, publications, checkpointer)  accounting (prices, estimates)
           \-> publisher worker -> providers (SocialPublisher) + policies (publish rules)
           \-> analytics worker -> providers (SocialAnalyticsProvider) + policies (retry) + analytics (derived)
+          \-> evaluations -> analytics (evaluation, pure)   strategies -> agents (strategy) + policies (strategy changes)
                      models  <- everything      config -> services.factory, providers.factory
 ```
 
@@ -477,6 +509,5 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
 
 See [ROADMAP.md](ROADMAP.md). Next structural additions:
 
-- Phase 7: an analysis step over `post_metrics` joined through `publication_lineage` to the
-  candidate, critique, findings and strategy version, proposing (not applying) a new strategy
-  version for human approval.
+- Phase 8: experiments that randomize hook or length per run, so a Phase 7 hypothesis can be
+  tested instead of only observed.

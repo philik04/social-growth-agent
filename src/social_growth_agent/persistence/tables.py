@@ -6,7 +6,9 @@ started/finished ``provider_operations``). Publishing (Phase 5) is not graph sta
 ``publications`` and ``publication_attempts`` tables are written only by the publication
 service and the publisher worker. Analytics (Phase 6) is not graph state either:
 ``analytics_jobs``, ``analytics_requests``, ``analytics_attempts`` and ``post_metrics``
-are written by the analytics service and worker. Execution state (where a run resumes)
+are written by the analytics service and worker. The strategy tables (Phase 7) are
+written only by the evaluation and strategy services; five of them are append-only,
+enforced by a trigger from migration 0005. Execution state (where a run resumes)
 lives in LangGraph's checkpoint tables, which are not declared here.
 
 Provenance is enforced with foreign keys: a finding's evidence must reference a post
@@ -19,6 +21,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -31,6 +34,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -85,6 +89,9 @@ class RunRow(Base):
     failure_type: Mapped[str | None] = mapped_column(String(128))
     failure_message: Mapped[str | None] = mapped_column(Text)
     pricing_id: Mapped[str | None] = mapped_column(ForeignKey("pricing_versions.id"))
+    strategy_version_ref: Mapped[str | None] = mapped_column(ForeignKey("strategy_versions.id"))
+    """The registered strategy version this run used (Phase 7); NULL for runs created with
+    an unregistered inline strategy and for every run created before Phase 7."""
     created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         Timestamp, server_default=func.now(), onupdate=func.now()
@@ -553,6 +560,212 @@ class PostMetricRow(Base):
     bookmarks: Mapped[int | None] = mapped_column(Integer)
     impressions: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+
+
+# --- strategy evaluation (Phase 7) -------------------------------------------------------
+# Append-only tables (versions, activations, evaluations, observations, decisions) are
+# also protected by a database trigger that rejects UPDATE and DELETE (migration 0005).
+
+IMMUTABLE_TABLES = (
+    "strategy_versions",
+    "strategy_activations",
+    "performance_evaluations",
+    "evaluation_observations",
+    "strategy_proposal_decisions",
+)
+STRATEGY_VERSION_ORIGINS = ("registered", "imported_from_run", "proposal")
+PROPOSAL_STATUSES = (
+    "generating",
+    "pending_review",
+    "failed",
+    "approved",
+    "rejected",
+    "superseded",
+    "abandoned",
+)
+DECISION_KINDS = ("approve", "reject")
+
+
+def _in(column: str, values: tuple[str, ...]) -> str:
+    return f"{column} IN (" + ", ".join(f"'{v}'" for v in values) + ")"
+
+
+class StrategyVersionRow(Base):
+    """An immutable strategy version. ``UNIQUE (strategy_id, version)``."""
+
+    __tablename__ = "strategy_versions"
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "version", name="uq_strategy_versions_version"),
+        CheckConstraint(_in("origin", STRATEGY_VERSION_ORIGINS), name="origin"),
+        CheckConstraint("version >= 1", name="version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    strategy_id: Mapped[str] = mapped_column(String(64))
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    content: Mapped[dict[str, Any]] = mapped_column(Json)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    parent_version_id: Mapped[str | None] = mapped_column(ForeignKey("strategy_versions.id"))
+    origin: Mapped[str] = mapped_column(String(32))
+    created_by: Mapped[str | None] = mapped_column(String(128))
+    auth_method: Mapped[str | None] = mapped_column(String(32))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+
+
+class StrategyActivationRow(Base):
+    """Append-only activation history. The active version of an account is the row with
+    the highest ``seq``; ``UNIQUE (account_id, seq)`` lets only one of two concurrent
+    activations win."""
+
+    __tablename__ = "strategy_activations"
+    __table_args__ = (
+        UniqueConstraint("account_id", "seq", name="uq_strategy_activations_seq"),
+        CheckConstraint("seq >= 1", name="seq"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64))
+    seq: Mapped[int] = mapped_column(Integer)
+    strategy_version_id: Mapped[str] = mapped_column(ForeignKey("strategy_versions.id"))
+    previous_version_id: Mapped[str | None] = mapped_column(ForeignKey("strategy_versions.id"))
+    activated_by: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    note: Mapped[str | None] = mapped_column(Text)
+    activated_at: Mapped[datetime] = mapped_column(Timestamp)
+
+
+class PerformanceEvaluationRow(Base):
+    """An immutable, reproducible evaluation (the evidence package). ``input_digest`` is
+    the normalized request: the same request returns the same evaluation."""
+
+    __tablename__ = "performance_evaluations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    strategy_id: Mapped[str | None] = mapped_column(String(64))
+    snapshot_age: Mapped[str] = mapped_column(String(16))
+    published_since: Mapped[datetime | None] = mapped_column(Timestamp)
+    published_until: Mapped[datetime | None] = mapped_column(Timestamp)
+    data_cutoff: Mapped[datetime] = mapped_column(Timestamp)
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    config: Mapped[dict[str, Any]] = mapped_column(Json)
+    config_version: Mapped[str] = mapped_column(String(16))
+    request: Mapped[dict[str, Any]] = mapped_column(Json)
+    input_digest: Mapped[str] = mapped_column(String(64), unique=True)
+    digest: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    eligible_count: Mapped[int] = mapped_column(Integer)
+    excluded_count: Mapped[int] = mapped_column(Integer)
+    posts_considered: Mapped[int] = mapped_column(Integer)
+    snapshots_used: Mapped[int] = mapped_column(Integer)
+    summary: Mapped[dict[str, Any]] = mapped_column(Json)
+    duration_ms: Mapped[float] = mapped_column(Float)
+    created_by: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+
+
+class EvaluationObservationRow(Base):
+    """One published post's part in one evaluation. Content and lineage are not copied:
+    ``publication_id`` and ``post_metric_id`` reach them."""
+
+    __tablename__ = "evaluation_observations"
+
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("performance_evaluations.id"), primary_key=True
+    )
+    publication_id: Mapped[str] = mapped_column(ForeignKey("publications.id"), primary_key=True)
+    post_metric_id: Mapped[str | None] = mapped_column(ForeignKey("post_metrics.id"))
+    run_id: Mapped[str] = mapped_column(String(64))
+    candidate_id: Mapped[str] = mapped_column(String(64))
+    eligible: Mapped[bool] = mapped_column(Boolean)
+    exclusion_reason: Mapped[str | None] = mapped_column(String(48))
+    metrics_provider: Mapped[str | None] = mapped_column(String(32))
+    actual_age_seconds: Mapped[int | None] = mapped_column(Integer)
+    hook_type: Mapped[str] = mapped_column(String(32))
+    origin: Mapped[str] = mapped_column(String(16))
+    format: Mapped[str] = mapped_column(String(16))
+    strategy_id: Mapped[str] = mapped_column(String(64))
+    strategy_version: Mapped[int] = mapped_column(Integer)
+    strategy_digest: Mapped[str] = mapped_column(String(64))
+    strategy_group: Mapped[str] = mapped_column(String(160))
+    length_chars: Mapped[int] = mapped_column(Integer)
+    length_bucket: Mapped[str] = mapped_column(String(32))
+    hour_utc: Mapped[int | None] = mapped_column(Integer)
+    hour_block_utc: Mapped[str | None] = mapped_column(String(8))
+    likes: Mapped[int | None] = mapped_column(Integer)
+    replies: Mapped[int | None] = mapped_column(Integer)
+    reposts: Mapped[int | None] = mapped_column(Integer)
+    quotes: Mapped[int | None] = mapped_column(Integer)
+    bookmarks: Mapped[int | None] = mapped_column(Integer)
+    impressions: Mapped[int | None] = mapped_column(Integer)
+
+
+class StrategyProposalRow(Base):
+    """A proposal and its own started/finished ledger: committed as ``generating`` before
+    the model call, finalized after it. At most one open proposal (``generating`` or
+    ``pending_review``) per account, enforced by a partial unique index."""
+
+    __tablename__ = "strategy_proposals"
+    __table_args__ = (
+        CheckConstraint(_in("status", PROPOSAL_STATUSES), name="status"),
+        Index(
+            "uq_strategy_proposals_open",
+            "account_id",
+            unique=True,
+            postgresql_where=text("status IN ('generating', 'pending_review')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(ForeignKey("performance_evaluations.id"), index=True)
+    evaluation_digest: Mapped[str] = mapped_column(String(64))
+    account_id: Mapped[str] = mapped_column(String(64))
+    base_version_id: Mapped[str] = mapped_column(ForeignKey("strategy_versions.id"))
+    status: Mapped[str] = mapped_column(String(32))
+    outcome: Mapped[str | None] = mapped_column(String(16))
+    proposer: Mapped[str] = mapped_column(String(16))
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(128))
+    prompt_version: Mapped[str] = mapped_column(String(32))
+    proposal: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    proposal_sha256: Mapped[str | None] = mapped_column(String(64))
+    validation_errors: Mapped[list[str] | None] = mapped_column(Json)
+    error_type: Mapped[str | None] = mapped_column(String(128))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    retry_of: Mapped[str | None] = mapped_column(ForeignKey("strategy_proposals.id"), unique=True)
+    requested_by: Mapped[str | None] = mapped_column(String(128))
+    pricing_id: Mapped[str] = mapped_column(ForeignKey("pricing_versions.id"))
+    started_at: Mapped[datetime] = mapped_column(Timestamp)
+    finished_at: Mapped[datetime | None] = mapped_column(Timestamp)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    llm_calls: Mapped[int] = mapped_column(Integer)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(Timestamp, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        Timestamp, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class StrategyProposalDecisionRow(Base):
+    """The human decision on a proposal. ``UNIQUE (proposal_id)``: a proposal is decided
+    once, so a second approval (or a reject after an approve) is refused by the database."""
+
+    __tablename__ = "strategy_proposal_decisions"
+    __table_args__ = (CheckConstraint(_in("decision", DECISION_KINDS), name="decision"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    proposal_id: Mapped[str] = mapped_column(ForeignKey("strategy_proposals.id"), unique=True)
+    decision: Mapped[str] = mapped_column(String(16))
+    reviewer: Mapped[str] = mapped_column(String(128))
+    auth_method: Mapped[str] = mapped_column(String(32))
+    summary: Mapped[str] = mapped_column(Text)
+    reviewed_proposal_sha256: Mapped[str | None] = mapped_column(String(64))
+    reviewed_evaluation_digest: Mapped[str | None] = mapped_column(String(64))
+    resulting_version_id: Mapped[str | None] = mapped_column(ForeignKey("strategy_versions.id"))
+    decided_at: Mapped[datetime] = mapped_column(Timestamp)
 
 
 Index("ix_runs_created_at", RunRow.created_at.desc())

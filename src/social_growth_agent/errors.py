@@ -223,3 +223,68 @@ class AnalyticsJobNotFoundError(ResourceNotFoundError):
 class NotSchedulableError(InvalidRunStateError):
     """Analytics cannot be scheduled for this publication (not published, no post id,
     or no publication timestamp)."""
+
+
+# --- strategy evaluation (Phase 7) --------------------------------------------------------
+
+
+class EvaluationNotFoundError(ResourceNotFoundError):
+    pass
+
+
+class ProposalNotFoundError(ResourceNotFoundError):
+    pass
+
+
+class StrategyVersionNotFoundError(ResourceNotFoundError):
+    pass
+
+
+class NoActiveStrategyError(ResourceNotFoundError):
+    """The account has no activated strategy version."""
+
+
+class InvalidEvaluationRequestError(SocialGrowthError):
+    """An evaluation request is malformed (unknown age, future cutoff...) (HTTP 422)."""
+
+
+class StrategyConflictError(InvalidRunStateError):
+    """A strategy body conflicts with a registered version (same id and version, different
+    content), or a version's account does not match (HTTP 409)."""
+
+
+class ProposalStateError(InvalidRunStateError):
+    """The proposal is not in a state that allows the operation (HTTP 409)."""
+
+
+class DigestMismatchError(ProposalStateError):
+    """The reviewer approved a different proposal or evaluation than the stored one."""
+
+
+class ProposalsDisabledError(InvalidRunStateError):
+    """STRATEGY_PROPOSER is 'disabled' (the default): no model is ever called (HTTP 409)."""
+
+
+class ProposalValidationError(AgentOutputError):
+    """The model's proposal failed deterministic validation. ``reasons`` lists every rule
+    it broke; the proposal is stored as ``failed`` and never offered for approval."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        super().__init__("proposal failed validation: " + "; ".join(reasons))
+        self.reasons = reasons
+
+
+class ReviewAuthError(SocialGrowthError):
+    """Base for strategy review authentication failures. Messages never echo a token."""
+
+
+class ReviewAuthNotConfiguredError(ReviewAuthError):
+    """No STRATEGY_REVIEW_TOKEN and unauthenticated review not enabled (HTTP 503)."""
+
+
+class ReviewAuthMissingError(ReviewAuthError):
+    """No review token was presented (HTTP 401)."""
+
+
+class ReviewAuthInvalidError(ReviewAuthError):
+    """A review token was presented but does not match (HTTP 403)."""

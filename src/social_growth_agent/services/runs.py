@@ -31,6 +31,7 @@ from social_growth_agent.models import (
 from social_growth_agent.observability import get_logger
 from social_growth_agent.persistence import Database, RunRecorder
 from social_growth_agent.persistence import repository as repo
+from social_growth_agent.persistence import strategies as strategy_store
 from social_growth_agent.persistence.tables import RunRow
 from social_growth_agent.persistence.views import (
     PendingReview,
@@ -79,6 +80,9 @@ class RunService:
         run_id = new_id("run")
         query = config.research_query or default_research_query(strategy)
         with self._db.transaction() as session:
+            # Phase 7: a registered (id, version) must be used with its exact body; an
+            # unregistered inline strategy still works (Phase 1-6 compatibility).
+            version_ref = strategy_store.registered_match(session, strategy)
             pricing_id = repo.save_price_list(session, self._prices)
             repo.insert_run(
                 session,
@@ -97,6 +101,7 @@ class RunService:
                     edit_rounds=0,
                     review_candidate_ids=[],
                     pricing_id=pricing_id,
+                    strategy_version_ref=version_ref,
                 ),
             )
         self._submit(run_id, lambda observe: self._start(run_id, observe))

@@ -14,6 +14,12 @@ Analytics (Phase 6) is read-only from here: endpoints list snapshots, posts, job
 lineage, and create jobs only on an explicit backfill. No endpoint calls the platform,
 and startup never schedules or collects anything; ``sga-analytics-worker`` does the
 reads.
+
+Strategy evaluation (Phase 7): ``POST /evaluations`` computes a deterministic evaluation
+from stored snapshots (no platform or model call). ``POST /evaluations/{id}/proposals``
+is the only endpoint that calls a model, and only when STRATEGY_PROPOSER is enabled.
+Approve, reject, activate and register need the review token. Approval creates a version
+and never activates it; activation is its own request. No read endpoint writes anything.
 """
 
 from collections.abc import AsyncIterator
@@ -21,35 +27,49 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 
 from social_growth_agent import __version__
 from social_growth_agent.api.errors import PersistenceNotConfiguredError, install_error_handlers
 from social_growth_agent.api.schemas import (
+    ActivateBody,
     ActorBody,
+    ApproveProposalBody,
     CreateRunRequest,
     HealthResponse,
     PublishRequestBody,
+    RegisterVersionBody,
+    RejectProposalBody,
+    RequestProposalBody,
     ResolvePublicationBody,
     ReviewRequestBody,
 )
 from social_growth_agent.config import AppSettings
 from social_growth_agent.models import AnalyticsJobStatus, PublicationStatus, RunStatus
+from social_growth_agent.models.strategy import Observation, ProposalStatus, ReviewAuthMethod
 from social_growth_agent.persistence.views import (
+    ActiveStrategyView,
     AnalyticsJobView,
+    EvaluationCreated,
+    EvaluationView,
     LineageView,
     MetricSnapshotView,
     PendingReview,
+    ProposalView,
     PublicationView,
     PublishedPostView,
     RunDetail,
     RunSummary,
+    StrategyHistoryView,
+    StrategyVersionView,
     UsageReport,
 )
 from social_growth_agent.services.analytics import AnalyticsService, BackfillResult
+from social_growth_agent.services.evaluations import EvaluationRequest, EvaluationService
 from social_growth_agent.services.publications import PublicationService
 from social_growth_agent.services.runs import RunService
 from social_growth_agent.services.runtime import Runtime, build_runtime
+from social_growth_agent.services.strategies import StrategyService
 
 
 def _run_service(request: Request) -> RunService:
@@ -73,6 +93,34 @@ def _analytics_service(request: Request) -> AnalyticsService:
     return current.analytics
 
 
+def _runtime(request: Request) -> Runtime:
+    current: Runtime | None = getattr(request.app.state, "runtime", None)
+    if current is None:
+        raise PersistenceNotConfiguredError("persistence is not configured (DATABASE_URL)")
+    return current
+
+
+def _evaluation_service(request: Request) -> EvaluationService:
+    service = _runtime(request).evaluations
+    if service is None:
+        raise PersistenceNotConfiguredError("strategy evaluation is not configured")
+    return service
+
+
+def _strategy_service(request: Request) -> StrategyService:
+    service = _runtime(request).strategies
+    if service is None:
+        raise PersistenceNotConfiguredError("strategy evaluation is not configured")
+    return service
+
+
+def _review_auth(
+    request: Request, authorization: Annotated[str | None, Header()] = None
+) -> ReviewAuthMethod:
+    """Strategy review authentication (see ``services.review_auth``)."""
+    return _runtime(request).review_auth.authenticate(authorization)
+
+
 def _aware(name: str, value: datetime | None) -> datetime | None:
     if value is not None and (value.tzinfo is None or value.utcoffset() is None):
         raise HTTPException(status_code=422, detail=f"{name} must include a timezone")
@@ -82,6 +130,9 @@ def _aware(name: str, value: datetime | None) -> datetime | None:
 RunServiceDep = Annotated[RunService, Depends(_run_service)]
 AnalyticsServiceDep = Annotated[AnalyticsService, Depends(_analytics_service)]
 PublicationServiceDep = Annotated[PublicationService, Depends(_publication_service)]
+EvaluationServiceDep = Annotated[EvaluationService, Depends(_evaluation_service)]
+StrategyServiceDep = Annotated[StrategyService, Depends(_strategy_service)]
+ReviewAuthDep = Annotated[ReviewAuthMethod, Depends(_review_auth)]
 
 
 def create_app(settings: AppSettings | None = None, runtime: Runtime | None = None) -> FastAPI:
@@ -119,8 +170,13 @@ def create_app(settings: AppSettings | None = None, runtime: Runtime | None = No
         return HealthResponse(status="ok", version=__version__, database=database)
 
     @app.post("/runs", status_code=status.HTTP_202_ACCEPTED)
-    def create_run(body: CreateRunRequest, runs: RunServiceDep) -> RunSummary:
-        return runs.create_run(body.account, body.strategy, body.config)
+    def create_run(body: CreateRunRequest, request: Request) -> RunSummary:
+        """``use_active_strategy: true`` runs with the account's activated version (404 if
+        none). An inline strategy that claims a registered version with a different body
+        is refused (409); an unregistered inline strategy works as before."""
+        runtime = _runtime(request)
+        strategy = body.strategy or _strategy_service(request).active_strategy(body.account.id)
+        return runtime.service.create_run(body.account, strategy, body.config)
 
     @app.get("/runs")
     def list_runs(
@@ -274,5 +330,140 @@ def create_app(settings: AppSettings | None = None, runtime: Runtime | None = No
         runs: RunServiceDep, limit: Annotated[int, Query(ge=1, le=200)] = 50
     ) -> list[PendingReview]:
         return runs.pending_reviews(limit=limit)
+
+    # --- strategy evaluation (Phase 7) ----------------------------------------------
+
+    @app.post("/evaluations", status_code=status.HTTP_201_CREATED)
+    def create_evaluation(
+        body: EvaluationRequest, response: Response, evaluations: EvaluationServiceDep
+    ) -> EvaluationCreated:
+        """Deterministic and descriptive; reads stored snapshots only (no platform or model
+        call). An identical request returns the stored evaluation (200)."""
+        created = evaluations.create(body)
+        if not created.created:
+            response.status_code = status.HTTP_200_OK
+        return created
+
+    @app.get("/evaluations")
+    def list_evaluations(
+        evaluations: EvaluationServiceDep,
+        account_id: Annotated[str | None, Query(max_length=64)] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> list[EvaluationView]:
+        return evaluations.list_evaluations(account_id=account_id, limit=limit)
+
+    @app.get("/evaluations/{evaluation_id}")
+    def get_evaluation(evaluation_id: str, evaluations: EvaluationServiceDep) -> EvaluationView:
+        return evaluations.get(evaluation_id)
+
+    @app.get("/evaluations/{evaluation_id}/observations")
+    def evaluation_observations(
+        evaluation_id: str,
+        evaluations: EvaluationServiceDep,
+        eligible: Annotated[bool | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> list[Observation]:
+        """Every post considered: eligible, or excluded with its reason."""
+        return evaluations.observations(
+            evaluation_id, eligible=eligible, limit=limit, offset=offset
+        )
+
+    @app.post("/evaluations/{evaluation_id}/proposals", status_code=status.HTTP_201_CREATED)
+    def request_proposal(
+        evaluation_id: str, body: RequestProposalBody, strategies: StrategyServiceDep
+    ) -> ProposalView:
+        """Opt-in (STRATEGY_PROPOSER). The only endpoint that may call a model. 409 when
+        proposals are disabled or another proposal is open for the account."""
+        return strategies.request_proposal(evaluation_id, requested_by=body.requested_by)
+
+    @app.get("/strategy-proposals")
+    def list_proposals(
+        strategies: StrategyServiceDep,
+        proposal_status: Annotated[ProposalStatus | None, Query(alias="status")] = None,
+        account_id: Annotated[str | None, Query(max_length=64)] = None,
+        evaluation_id: Annotated[str | None, Query(max_length=64)] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> list[ProposalView]:
+        return strategies.list_proposals(
+            status=proposal_status, account_id=account_id, evaluation_id=evaluation_id, limit=limit
+        )
+
+    @app.get("/strategy-proposals/{proposal_id}")
+    def get_proposal(proposal_id: str, strategies: StrategyServiceDep) -> ProposalView:
+        return strategies.get_proposal(proposal_id)
+
+    @app.post("/strategy-proposals/{proposal_id}/retry", status_code=status.HTTP_201_CREATED)
+    def retry_proposal(
+        proposal_id: str, body: RequestProposalBody, strategies: StrategyServiceDep
+    ) -> ProposalView:
+        """Retry a failed proposal, or one stuck generating past the stale threshold."""
+        return strategies.retry_proposal(proposal_id, requested_by=body.requested_by)
+
+    @app.post("/strategy-proposals/{proposal_id}/approve")
+    def approve_proposal(
+        proposal_id: str,
+        body: ApproveProposalBody,
+        auth: ReviewAuthDep,
+        strategies: StrategyServiceDep,
+    ) -> ProposalView:
+        """All-or-nothing. Creates a new strategy version; does not activate it, publish
+        anything or start a run."""
+        return strategies.approve(
+            proposal_id,
+            reviewer=body.reviewer,
+            auth=auth,
+            summary=body.summary,
+            proposal_sha256=body.proposal_sha256,
+            evaluation_digest=body.evaluation_digest,
+        )
+
+    @app.post("/strategy-proposals/{proposal_id}/reject")
+    def reject_proposal(
+        proposal_id: str,
+        body: RejectProposalBody,
+        auth: ReviewAuthDep,
+        strategies: StrategyServiceDep,
+    ) -> ProposalView:
+        return strategies.reject(
+            proposal_id, reviewer=body.reviewer, auth=auth, summary=body.summary
+        )
+
+    @app.post("/strategies/versions", status_code=status.HTTP_201_CREATED)
+    def register_strategy_version(
+        body: RegisterVersionBody,
+        response: Response,
+        auth: ReviewAuthDep,
+        strategies: StrategyServiceDep,
+    ) -> StrategyVersionView:
+        """Register a human-written strategy as a version (idempotent: 200 if identical)."""
+        result = strategies.register_version(
+            body.strategy, reviewer=body.reviewer, auth=auth, note=body.note
+        )
+        if not result.created:
+            response.status_code = status.HTTP_200_OK
+        return result.version
+
+    @app.get("/strategies/{strategy_id}/versions")
+    def strategy_history(strategy_id: str, strategies: StrategyServiceDep) -> StrategyHistoryView:
+        return strategies.history(strategy_id)
+
+    @app.post("/strategies/{strategy_id}/activate")
+    def activate_strategy(
+        strategy_id: str, body: ActivateBody, auth: ReviewAuthDep, strategies: StrategyServiceDep
+    ) -> ActiveStrategyView:
+        """Explicit and compare-and-set (409 if the active version changed)."""
+        return strategies.activate(
+            strategy_id,
+            body.version,
+            expected_active_version_id=body.expected_active_version_id,
+            reviewer=body.reviewer,
+            auth=auth,
+            note=body.note,
+        )
+
+    @app.get("/accounts/{account_id}/active-strategy")
+    def active_strategy(account_id: str, strategies: StrategyServiceDep) -> ActiveStrategyView:
+        return strategies.active(account_id)
 
     return app

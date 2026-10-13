@@ -3,11 +3,16 @@
 An agentic orchestration system that grows a creator's or founder's presence on X by running a
 closed loop: **research → generate → critique → human approval → publish → analyze → update strategy**.
 
-> Status: **Phase 6, analytics collection.** Published posts get public-metric snapshots at
-> fixed ages (1h, 24h, 72h by default), collected by a lease-based worker with a durable
-> request ledger and a bounded backoff, each joined back to the research, critique, approval
-> and strategy that produced the post ([docs/ANALYTICS.md](docs/ANALYTICS.md)). No
-> interpretation and no automatic strategy change yet. Approved content can be published to
+> Status: **Phase 7, strategy evaluation.** Deterministic, age-matched evaluations describe
+> how published posts performed by hook, length, posting hour and strategy version, with
+> explicit evidence levels, excluded posts and their reasons, and no causal claims. An
+> opt-in Strategy Agent may propose changes to two soft preferences (preferred hooks and
+> length guidance), each citing the evaluation; a human approves it (review token) into a new
+> inactive version and activates it in a separate step. Nothing changes or publishes on its
+> own ([docs/STRATEGY_EVALUATION.md](docs/STRATEGY_EVALUATION.md)). Published posts get
+> public-metric snapshots at fixed ages (1h, 24h, 72h by default), each joined back to the
+> research, critique, approval and strategy that produced it
+> ([docs/ANALYTICS.md](docs/ANALYTICS.md)). Approved content can be published to
 > X, as a separate explicit request: one durable publication intent, a lease-based worker that makes exactly
 > one platform call per attempt, scheduling, and an explicit `unknown` state for outcomes X
 > cannot confirm (never retried on its own). Runs live in PostgreSQL and survive process
@@ -150,6 +155,31 @@ returned post is a billed post read). The live check is opt-in and read-only:
 `RUN_LIVE_X_ANALYTICS_TESTS=1 ... python -m social_growth_agent.services.x_analytics_demo <post-id>`,
 and it only reads posts this application published. See [docs/ANALYTICS.md](docs/ANALYTICS.md).
 
+### Evaluating performance and updating strategy
+
+```bash
+# the whole Phase 7 loop offline and free (synthetic snapshots, fake Strategy Agent)
+DATABASE_URL=postgresql://sga@localhost:5433/sga_scratch \
+  uv run python -m social_growth_agent.services.strategy_demo
+
+curl -s -XPOST localhost:8000/evaluations \
+  -d '{"account_id": "acct_1", "snapshot_age": "24h"}' -H 'content-type: application/json'
+curl -s -XPOST localhost:8000/evaluations/$EVAL/proposals -d '{}' -H 'content-type: application/json'
+curl -s -XPOST localhost:8000/strategy-proposals/$PROP/approve -H "Authorization: Bearer $STRATEGY_REVIEW_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"reviewer": "me", "summary": "try it", "proposal_sha256": "...", "evaluation_digest": "..."}'
+curl -s -XPOST localhost:8000/strategies/$STRAT/activate -H "Authorization: Bearer $STRATEGY_REVIEW_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"version": 2, "expected_active_version_id": "sv_...", "reviewer": "me"}'
+```
+
+Evaluations never call a model or X. Proposals are off by default (`STRATEGY_PROPOSER`);
+approval and activation need `STRATEGY_REVIEW_TOKEN`. New runs pick up the activated
+version with `"use_active_strategy": true`. Strategies used by earlier runs can be
+registered explicitly with `uv run sga-strategy import-runs --dry-run` (then without
+`--dry-run`); conflicting bodies are reported, never merged. See
+[docs/STRATEGY_EVALUATION.md](docs/STRATEGY_EVALUATION.md).
+
 ### Live publishing (opt-in, creates ONE real post)
 
 ```bash
@@ -232,19 +262,19 @@ run = service.submit_review(run.state.run_id, decision)  # approve / reject / ed
 src/social_growth_agent/
   config.py       settings from env / .env
   models/         domain objects (Pydantic, immutable)
-  policies/       content policy (hard rules), critic gate, human edit policy, research + publish rules
+  policies/       content policy (hard rules), critic gate, human edit policy, research + publish rules, strategy changes
   graph/          state, nodes, pure routing, builder, checkpoint serialization
-  agents/         research, content, critic, prompts/*.md, deterministic fakes
+  agents/         research, content, critic, strategy, prompts/*.md, deterministic fakes
   providers/      LLM + social-platform protocols, OpenAI adapter, x/ (research, publishing, analytics), mocks/
-  services/       WorkflowService, RunService, PublicationService, PublisherWorker, AnalyticsWorker, runtime, demos
-  persistence/    SQLAlchemy tables, Alembic migrations, recorder, ledgers, publications, analytics, lineage, checkpointer, sga-db
-  analytics/      observed derived metrics (pure, NULL-propagating)
+  services/       WorkflowService, RunService, PublicationService, PublisherWorker, AnalyticsWorker, Evaluation/StrategyService, review auth, runtime, demos
+  persistence/    SQLAlchemy tables, Alembic migrations, recorder, ledgers, publications, analytics, lineage, evaluations, strategies, checkpointer, sga-db
+  analytics/      observed derived metrics and strategy evaluations (pure, deterministic)
   accounting/     price list (pricing.toml) and cost estimates
-  api/            FastAPI app: run, review, resume, usage, publication and analytics endpoints
+  api/            FastAPI app: run, review, resume, usage, publication, analytics, evaluation and strategy endpoints
   evaluation/     critic evaluation harness
   observability/  structured logging, timing
 tests/
-docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ANALYTICS.md, ROADMAP.md
+docs/             ARCHITECTURE.md, DATABASE.md, PUBLISHING.md, ANALYTICS.md, STRATEGY_EVALUATION.md, ROADMAP.md
 pricing.toml      prices for cost estimates (blank by default; never in code)
 docker-compose.yml  local PostgreSQL only
 ```

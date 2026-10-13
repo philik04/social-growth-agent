@@ -9,11 +9,13 @@ notes are supplied it echoes the latest one, so tests can see they reached the p
 """
 
 from collections import defaultdict
+from decimal import Decimal
 from typing import Any
 
 from social_growth_agent.agents.content import CandidateBatch, CandidateDraft
 from social_growth_agent.agents.critic import CandidateEvaluation, CriticReport, IssueDraft
 from social_growth_agent.agents.research import FindingDraft, OpportunityDraft, ResearchReport
+from social_growth_agent.agents.strategy import ChangeDraft, StrategyProposalDraft
 from social_growth_agent.models import (
     ClaimType,
     Confidence,
@@ -23,6 +25,13 @@ from social_growth_agent.models import (
     PostFormat,
     RiskLevel,
     ToneMatch,
+)
+from social_growth_agent.models.strategy import (
+    ExpectedDirection,
+    Metric,
+    ProposableField,
+    ProposalConfidence,
+    ProposalOutcome,
 )
 from social_growth_agent.providers.llm import LLMRequest
 from social_growth_agent.providers.mocks.llm import ScriptedLLMProvider, payload_list
@@ -136,9 +145,65 @@ def fake_critic(request: LLMRequest) -> CriticReport:
     return CriticReport(evaluations=evaluations)
 
 
+def fake_strategy(request: LLMRequest) -> StrategyProposalDraft:
+    """Proposes the hook type with the higher median engagement rate in the hook
+    comparison with the largest such difference, as a low-confidence hypothesis. No
+    hook comparison (or no rate data), or that hook already preferred: no change. Its
+    text contains no numbers, so it never trips the invented-statistics check."""
+    evaluation = _dict(request, "evaluation")
+    current = _dict(request, "current_strategy").get("preferred_hooks", [])
+    best: tuple[Decimal, str, str] | None = None
+    for comparison in evaluation.get("comparisons", []):
+        if comparison.get("dimension") != "hook_type":
+            continue
+        for diff in comparison.get("differences", []):
+            value = diff.get("median_difference")
+            if diff.get("metric") != "engagement_rate" or value is None:
+                continue
+            delta = Decimal(str(value))
+            leader = comparison["group_a"] if delta > 0 else comparison["group_b"]
+            if delta != 0 and (best is None or abs(delta) > best[0]):
+                best = (abs(delta), str(comparison["comparison_id"]), str(leader))
+    if best is None or current == [best[2]]:
+        return StrategyProposalDraft(
+            outcome=ProposalOutcome.NO_CHANGE,
+            summary="The evaluation does not support a strategy change. No change recommended.",
+            changes=[],
+            posting_time_note=None,
+            posting_time_evidence_refs=[],
+        )
+    _, ref, hook = best
+    return StrategyProposalDraft(
+        outcome=ProposalOutcome.CHANGE,
+        summary=f"Prefer {hook} hooks, as a hypothesis to test in future posts.",
+        changes=[
+            ChangeDraft(
+                field=ProposableField.PREFERRED_HOOKS,
+                proposed_hooks=[HookType(hook)],
+                proposed_length=None,
+                evidence_refs=[ref],
+                expected_metric=Metric.ENGAGEMENT_RATE,
+                expected_direction=ExpectedDirection.INCREASE,
+                confidence=ProposalConfidence.LOW,
+                rationale=f"In the cited comparison the {hook} group had the higher median "
+                "engagement rate.",
+                limitations=["descriptive comparison of a small sample"],
+                confounders=["time trend and topic differ between the groups"],
+            )
+        ],
+        posting_time_note=None,
+        posting_time_evidence_refs=[],
+    )
+
+
 def build_fake_llm() -> ScriptedLLMProvider:
     return ScriptedLLMProvider(
-        {ResearchReport: fake_research, CandidateBatch: fake_content, CriticReport: fake_critic}
+        {
+            ResearchReport: fake_research,
+            CandidateBatch: fake_content,
+            CriticReport: fake_critic,
+            StrategyProposalDraft: fake_strategy,
+        }
     )
 
 

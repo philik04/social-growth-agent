@@ -23,6 +23,13 @@ def upgrade(database_url: str) -> None:
     setup_checkpoint_tables(libpq_url(database_url))
 
 
+def head_revision() -> str | None:
+    """The newest migration shipped with this code."""
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory.from_config(alembic_config("postgresql://unused")).get_current_head()
+
+
 def current_revision(database_url: str) -> str | None:
     from alembic.runtime.migration import MigrationContext
 

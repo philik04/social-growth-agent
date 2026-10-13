@@ -17,7 +17,7 @@ def test_schema_is_strict_mode_compatible(schema):
     assert json_schema["additionalProperties"] is False
 
 
-@pytest.mark.parametrize("name", ["research", "content", "critic"])
+@pytest.mark.parametrize("name", ["research", "content", "critic", "strategy"])
 def test_prompts_have_required_sections(name):
     prompt = load_prompt(name)
     for section in ("# Role", "# Objective", "# Available inputs", "# Output contract"):

@@ -1,6 +1,6 @@
 """Domain models. Import from here rather than from submodules."""
 
-from social_growth_agent.models.account import Account, ContentStrategy
+from social_growth_agent.models.account import Account, ContentStrategy, LengthGuidance
 from social_growth_agent.models.analytics import (
     AnalyticsFailureCategory,
     AnalyticsFetch,
@@ -102,6 +102,7 @@ __all__ = [
     "IssueCategory",
     "LLMCall",
     "LLMCallOutcome",
+    "LengthGuidance",
     "MetricsScope",
     "NodeEvent",
     "PerformanceInsight",
