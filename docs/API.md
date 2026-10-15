@@ -1,5 +1,12 @@
 # API index
 
+Primary source enrichment: `POST /discovery/opportunities/{id}/enrich` (review
+token), body `{item_id, url, requested_by, excerpts?, refresh?}`. Returns a separate
+audited session and derived opportunity, or a failed session with no new evidence.
+Duplicates return the existing result without a fetch. It never starts a run,
+calls a model/social API or overwrites the original evidence. See
+[content discovery](CONTENT_DISCOVERY.md#explicit-primary-source-enrichment).
+
 All endpoints of `social_growth_agent.api.app`, by phase. The OpenAPI document at
 `/docs` (or `/openapi.json`) has the request and response schemas.
 

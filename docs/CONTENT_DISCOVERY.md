@@ -60,8 +60,66 @@ limit or name a recipient. The shipped registry (checked 2026-10-13):
   classes; `live` uses HTTPS. X sources read the real X API only with
   `RESEARCH_PROVIDER=x`; otherwise the synthetic X fixtures are used and the session is
   labelled `synthetic`.
-- Not included: Reddit (its API terms need review), Mastodon, Bluesky, fetching linked
-  pages, any scraping, and any rate-limit circumvention.
+- Not included: Reddit (its API terms need review), Mastodon, Bluesky, automatic
+  linked-page fetching, general crawling, or rate-limit circumvention. Explicit
+  primary-article enrichment is available for one selected source (below).
+
+## Explicit primary-source enrichment
+
+When a feed supplies only a title, a reviewer can authorize one primary article:
+
+```bash
+LLM_PROVIDER=fake uv run sga-discovery enrich opp_... --item item_... \
+  --url https://publisher.example/official-article --by reviewer
+```
+
+The CLI checks `SGA_REVIEW_TOKEN` against the private configured review token.
+The equivalent token-protected API is
+`POST /discovery/opportunities/{id}/enrich` with `item_id`, `url`, `requested_by`,
+optional literal `excerpts` (2–12 entries, 40–500 characters each), and optional
+`refresh: true`. Nothing starts a run or calls a model/social API. This explicit
+command reads a real article even with ordinary discovery providers set to mock;
+the selected evidence itself must be real. Offline tests inject a mock transport.
+
+Only a real, unpurged primary feed item already linked to the selected opportunity
+can be enriched. The URL must match that item's canonical URL. The fetcher uses
+HTTPS, exact-host redirects (at most three), public DNS addresses pinned into the
+connection with original Host/TLS SNI, no environment proxies or credentials,
+10-second HTTP timeouts, a 30-second elapsed budget checked during transfer, and
+at most 2 MB of decoded HTML. DNS resolution uses the operating system resolver;
+an in-progress HTTP read can run until its timeout after the elapsed budget is hit.
+It reads a bounded robots policy first, refuses disallowed paths, unavailable
+access policy, non-200 HTML, login/paywall errors, and noarchive/nosnippet storage
+restrictions. It never executes JavaScript, follows article links, paginates or retries.
+
+Extraction retains at most 12 complete technical excerpts, at most 4000 characters
+including attribution. Navigation, scripts and code blocks are excluded. Optional
+reviewer-selected excerpts must match literal article prose, so submitted fact
+notes cannot introduce unsupported claims. Metadata supplies author/publication
+date where present; otherwise the original publisher/date are preserved. The full
+HTML is discarded; its SHA-256 and the compact evidence digest are recorded.
+All claims are labelled self-reported, not independently verified. The existing
+Research Agent's claim validation and URL/number grounding remain unchanged.
+
+No migration or extra tables are required. Enrichment appends a separate
+`discovery_sessions` / `discovery_fetches` audit, a content-addressed
+`discovery_items` version and a new opportunity. Session metadata links the new
+version to the original item/opportunity and records extraction version, response
+digest and final URL. Original evidence, ranking, sessions and completed runs are
+untouched. The derived opportunity's score is explicitly inherited, not reranked;
+no discussion or Grok eligibility is invented. Select the **new opportunity id**
+for a later reviewed generation run; replay and finding evidence use its new item
+id through the existing provenance chain.
+
+Repeated enrichment returns the prior audit without another GET, including failed
+or unfinished attempts. Only an explicit `refresh` requests a new fetch; it still
+does not re-fetch an unfinished attempt. Unchanged content reuses the same version,
+while changed content creates another version. All versions keep the original
+platform/provider-item identity, so existing purges/tombstones cover them together.
+Ingestion and purge share identity locks to protect against concurrent deletion.
+No copies of extracted prose are placed in request/audit JSON outside the normal
+purgeable evidence storage. Extraction requires recognizable static article prose;
+unsupported/dynamic-only pages fail safely without fabricating evidence.
 
 ### Mock and live data in one database
 

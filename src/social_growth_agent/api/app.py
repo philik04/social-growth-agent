@@ -105,6 +105,11 @@ from social_growth_agent.services.discovery import (
     ManualPublicationBody,
     OpportunityRunCreated,
 )
+from social_growth_agent.services.enrichment import (
+    EnrichmentBody,
+    EnrichmentResult,
+    enrich_primary_source,
+)
 from social_growth_agent.services.evaluations import EvaluationRequest, EvaluationService
 from social_growth_agent.services.experiments import (
     AdoptBody,
@@ -720,6 +725,18 @@ def create_app(settings: AppSettings | None = None, runtime: Runtime | None = No
     def opportunity_items(opportunity_id: str, discovery: DiscoveryServiceDep) -> list[ItemView]:
         """The evidence items with provenance. Purged items show ids and URL only."""
         return discovery.opportunity_items(opportunity_id)
+
+    @app.post("/discovery/opportunities/{opportunity_id}/enrich", status_code=201)
+    def enrich_opportunity(
+        opportunity_id: str,
+        body: EnrichmentBody,
+        auth: ReviewAuthDep,
+        discovery: DiscoveryServiceDep,
+    ) -> EnrichmentResult:
+        """Explicit bounded primary article read; creates a separate evidence version.
+        Duplicate requests reuse the audited result without fetching again.
+        Never generates, publishes or changes the selected opportunity's evidence."""
+        return enrich_primary_source(discovery, opportunity_id, body, auth=auth)
 
     @app.post("/discovery/opportunities/{opportunity_id}/dismiss")
     def dismiss_opportunity(

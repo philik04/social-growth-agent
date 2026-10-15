@@ -49,11 +49,12 @@ from social_growth_agent.services.discovery import (
     ExportBody,
     ManualPublicationBody,
 )
+from social_growth_agent.services.enrichment import EnrichmentBody, enrich_primary_source
 from social_growth_agent.services.runs import InlineExecutor
 from social_growth_agent.services.runtime import Runtime, build_runtime
 
 TOKEN_ENV = "SGA_REVIEW_TOKEN"
-MUTATING = frozenset({"run", "start-run", "export", "register", "purge"})
+MUTATING = frozenset({"run", "start-run", "export", "register", "purge", "enrich"})
 
 
 def parser() -> argparse.ArgumentParser:
@@ -72,6 +73,16 @@ def parser() -> argparse.ArgumentParser:
     show.add_argument("session_id")
     opps = sub.add_parser("opportunities", help="List a session's ranked opportunities.")
     opps.add_argument("session_id")
+    enrich = sub.add_parser(
+        "enrich", help="Explicitly fetch a selected primary article; no model calls."
+    )
+    enrich.add_argument("opportunity_id")
+    enrich.add_argument("--item", required=True)
+    enrich.add_argument("--url", required=True)
+    enrich.add_argument("--by", required=True)
+    enrich.add_argument(
+        "--refresh", action="store_true", help="Explicitly request a new evidence version."
+    )
     start = sub.add_parser("start-run", help="Start a run from an opportunity.")
     start.add_argument("opportunity_id")
     start.add_argument("--intent", required=True, choices=[i.value for i in ContentIntent])
@@ -155,6 +166,20 @@ def _dispatch(runtime: Runtime, args: argparse.Namespace) -> int:
             _emit(discovery.get_session(args.session_id))
         case "opportunities":
             _opportunities(discovery, args.session_id)
+        case "enrich":
+            _emit(
+                enrich_primary_source(
+                    discovery,
+                    args.opportunity_id,
+                    EnrichmentBody(
+                        item_id=args.item,
+                        url=args.url,
+                        requested_by=args.by,
+                        refresh=args.refresh,
+                    ),
+                    auth=auth,
+                )
+            )
         case "start-run":
             account = Account.model_validate_json(args.account_file.read_text(encoding="utf-8"))
             body = StartRunFromOpportunity(

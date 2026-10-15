@@ -66,6 +66,7 @@ def purge(
 ) -> PurgeResult:
     now = now or utc_now()
     ids = list(dict.fromkeys(i.strip() for i in provider_item_ids if i.strip()))
+    ddb.lock_source_identities(session, platform, ids)
     items = ddb.item_ids_for(session, platform, ids)
     item_ids = [r.id for r in items]
     if item_ids:

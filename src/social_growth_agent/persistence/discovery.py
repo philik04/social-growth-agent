@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -237,6 +237,17 @@ def tombstoned(session: Session, platform: str, provider_item_ids: Iterable[str]
     )
 
 
+def lock_source_identities(
+    session: Session, platform: str, provider_item_ids: Iterable[str]
+) -> None:
+    """Serialize ingestion/enrichment with deletion, including versions not yet inserted."""
+    for provider_id in sorted(set(provider_item_ids)):
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:identity, 0))"),
+            {"identity": f"discovery:{platform}:{provider_id}"},
+        )
+
+
 def upsert_items(
     session: Session,
     *,
@@ -246,6 +257,7 @@ def upsert_items(
     vocabulary: Sequence[str],
     synthetic: bool,
     now: datetime,
+    versioned: bool = False,
 ) -> tuple[list[str], int]:
     """Store new items, refresh metrics of known ones and record the sightings.
 
@@ -253,7 +265,10 @@ def upsert_items(
     The first retrieved text is kept: an item's identity and content hash never change.
     """
     blocked: set[tuple[str, str]] = set()
-    for platform in {i.platform for i in items}:
+    for platform in sorted({i.platform for i in items}):
+        lock_source_identities(
+            session, platform, (i.provider_item_id for i in items if i.platform == platform)
+        )
         blocked |= {
             (platform, pid)
             for pid in tombstoned(
@@ -268,6 +283,10 @@ def upsert_items(
             continue
         metrics = _metrics(item)
         key = item_key(item, synthetic=synthetic)
+        if versioned:
+            # Explicit article enrichment creates a content-addressed version; normal
+            # discovery still keeps its original identity and first retrieved text.
+            key = f"enrichment:{hashlib.sha256(key.encode()).hexdigest()}:{content_digest(item)}"
         if not synthetic:
             key = _real_key(session, key)
         verification = item_verification(item.category, item.evidence_type, item.tier)
