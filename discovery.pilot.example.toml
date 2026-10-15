@@ -1,0 +1,107 @@
+# Reusable technology discovery example; inert until explicitly selected.
+# Copy privately to discovery.pilot.toml without overwriting an existing profile.
+# Pair with examples/pilot/discovery.request.example.json: the registry limits
+# opportunities; the request supplies the X request, post and expanded-user caps.
+# Selecting live providers can incur paid reads; copying this file authorizes none.
+# Sources use public publisher feeds and official APIs. Credibility is not fact checking.
+# URLs are configuration examples, not a claim of current source availability.
+# X uses the privately supplied X_BEARER_TOKEN; no credential belongs in this file.
+
+version = "bounded-technology-example-v1"
+
+# Topic vocabulary for relevance, keywords and audience matching. Phrases match on word
+# boundaries, case-insensitively.
+vocabulary = [
+  "agent", "agents", "agentic", "multi-agent", "tool use", "function calling", "mcp",
+  "langgraph", "orchestration", "workflow", "evals", "evaluation", "benchmark",
+  "benchmarks", "llm", "llms", "inference", "serving", "vllm", "fine-tuning", "rag",
+  "retrieval", "embedding", "embeddings", "mlops", "gpu", "kubernetes", "observability",
+  "open-source", "open source", "reasoning", "coding agent", "code generation",
+  "automation", "developer", "developers", "api", "safety", "alignment", "human oversight",
+  "small model", "small models", "distillation", "quantization", "context window",
+]
+
+# Vocabulary terms too broad to make a @grok question's subject specific (criterion 3).
+# Each domain's registry lists its own.
+generic_terms = [
+  "agent", "agents", "agentic", "llm", "llms", "developer", "developers", "automation",
+  "workflow", "api", "safety", "open source", "open-source",
+]
+
+[weights]
+topic_relevance = 0.25
+timeliness = 0.15
+source_credibility = 0.15
+evidence_quality = 0.15
+novelty = 0.10
+discussion_potential = 0.05
+strategy_fit = 0.15
+
+[policy]
+timeliness_half_life_hours = 72
+cluster_similarity = 0.6
+own_post_similarity = 0.6
+novelty_window_days = 30
+fingerprint_suppression_days = 14
+dismissed_suppression_days = 30
+opportunity_ttl_days = 7
+grok_freshness_days = 14
+grok_dedup_days = 90
+grok_similarity = 0.5
+max_opportunities = 5
+# Shortlist diversity: of the top `shortlist_size` places, at most
+# `max_per_project_in_shortlist` go to one GitHub project (owner/repo). The others keep
+# their score and follow in score order; nothing is dropped.
+shortlist_size = 5
+max_per_project_in_shortlist = 2
+max_audience_entries = 10
+
+[[sources]]
+id = "openai-news"
+kind = "feed"
+category = "primary"
+publisher = "OpenAI"
+tier = "official"
+evidence_type = "official_announcement"
+url = "https://openai.com/news/rss.xml"
+topics = ["models", "agents"]
+
+[[sources]]
+id = "huggingface-blog"
+kind = "feed"
+category = "primary"
+publisher = "Hugging Face"
+tier = "official"
+evidence_type = "engineering_blog"
+url = "https://huggingface.co/blog/feed.xml"
+topics = ["open models", "infrastructure"]
+
+[[sources]]
+id = "langgraph-releases"
+kind = "github_releases"
+category = "primary"
+publisher = "LangGraph (GitHub)"
+tier = "official"
+evidence_type = "release"
+repo = "langchain-ai/langgraph"
+topics = ["agents", "orchestration"]
+
+[[sources]]
+id = "hn-ai-agents"
+kind = "hn_search"
+category = "discussion"
+publisher = "Hacker News"
+tier = "community"
+evidence_type = "discussion_thread"
+query = "AI agents"
+topics = ["agents"]
+
+[[sources]]
+id = "x-ai-engineering"
+kind = "x_search"
+category = "discussion"
+publisher = "X"
+tier = "community"
+evidence_type = "discussion_post"
+query = "(\"AI agents\" OR agentic OR LLM inference OR MLOps) lang:en"
+topics = ["agents", "infrastructure"]

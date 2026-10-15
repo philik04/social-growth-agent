@@ -10,6 +10,14 @@ credentials*.json
 secrets*.json
 service-account*.json
 
+# Local account configuration and execution records
+/pilot/
+/discovery.pilot.toml
+
+# Account-specific operational notes
+/docs/FIRST_DISCOVERY_PLAN.md
+/docs/PILOT_RUNBOOK.md
+
 # Python
 __pycache__/
 *.py[cod]

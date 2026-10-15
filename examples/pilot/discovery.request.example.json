@@ -1,0 +1,22 @@
+{
+  "account_id": "example_account",
+  "sources": [
+    "openai-news",
+    "huggingface-blog",
+    "langgraph-releases",
+    "hn-ai-agents",
+    "x-ai-engineering"
+  ],
+  "limits": {
+    "x_requests": 1,
+    "posts_per_x_request": 10,
+    "user_reads": 10,
+    "feeds": 2,
+    "items_per_feed": 10,
+    "github_requests": 1,
+    "hn_requests": 1,
+    "cache_hours": 6
+  },
+  "refresh": false,
+  "requested_by": "example_operator"
+}
