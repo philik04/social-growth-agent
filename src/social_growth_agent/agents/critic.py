@@ -111,13 +111,19 @@ def _to_critique(
     evaluation: CandidateEvaluation, candidate: ContentCandidate, policy: ContentPolicy
 ) -> Critique:
     violations = find_violations(candidate, policy)
+    issues = [CritiqueIssue(category=i.category, detail=i.detail) for i in evaluation.issues]
     suggestion = evaluation.suggested_revision
     if violations and suggestion is None:
         suggestion = "Fix the policy violations: " + "; ".join(v.detail for v in violations)
+    if suggestion is None and any(i.category is IssueCategory.UNCLEAR for i in issues):
+        suggestion = (
+            "State one clear main message in language the target audience can understand "
+            "on the first reading; preserve factual attribution and evidence limits."
+        )
     return Critique(
         candidate_id=candidate.id,
         generation_attempt=candidate.generation_attempt,
-        verdict=final_verdict(evaluation.recommendation, violations),
+        verdict=final_verdict(evaluation.recommendation, violations, issues=issues),
         recommended_verdict=evaluation.recommendation,
         assessment=CritiqueAssessment(
             score=evaluation.score,
@@ -125,7 +131,7 @@ def _to_critique(
             originality_risk=evaluation.originality_risk,
             tone_match=evaluation.tone_match,
         ),
-        issues=[CritiqueIssue(category=i.category, detail=i.detail) for i in evaluation.issues],
+        issues=issues,
         policy_violations=violations,
         suggested_revision=suggestion,
     )

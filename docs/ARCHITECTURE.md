@@ -74,7 +74,7 @@ against OpenAI's strict-mode schema converter (`tests/test_llm_contracts.py`).
 ```
 candidate --> LLM evaluation (recommendation, score, risks, soft issues)
           --> policies.find_violations(candidate, ContentPolicy)   # hard rules, code only
-          --> policies.final_verdict(recommendation, violations)   # violation => never PASS
+          --> policies.final_verdict(recommendation, violations, issues=issues)
           --> Critique{verdict, recommended_verdict, assessment, issues, policy_violations}
 ```
 
@@ -86,6 +86,18 @@ candidate --> LLM evaluation (recommendation, score, risks, soft issues)
 - A violation downgrades the model's `pass` to `revise`, so the retry loop can fix it. The model's
   `reject` is never upgraded. Both `recommended_verdict` and `verdict` are stored, so disagreement
   between the model and the policy is measurable.
+- **Main-message clarity** is judged against the supplied audience in any domain.
+  New Content Agent rationales begin with a one-sentence plain-language paraphrase
+  of the post, followed by its clarity and usefulness for that audience. This is
+  review metadata; the post must communicate the point without it. The Critic
+  checks that intended message against the actual text and records clarity failures
+  as existing `unclear` issues, explaining the apparent message and the missing
+  connection. Code downgrades `pass` to `revise` whenever such an issue is present,
+  even with a high score; it preserves the model's recommendation, score and issue.
+  This remains a subjective editorial judgement, not a hard policy violation or
+  a measured comprehension score. An absent issue is not proof of reader understanding.
+  No output fields, migrations, extra model calls or new agents are required.
+  Stored historical candidates and critiques are not re-evaluated or rewritten.
 
 ### Critic gate
 

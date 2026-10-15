@@ -28,7 +28,11 @@ class CandidateDraft(BaseModel):
     format: PostFormat
     target_audience: str
     research_finding_ids: list[str]
-    rationale: str
+    rationale: str = Field(
+        description="First state the post's main message in one simple sentence, then "
+        "explain its immediate clarity and usefulness for the target audience. Review "
+        "metadata only; it must not supply a missing explanation for the post."
+    )
     revises_candidate_id: str | None = Field(
         description="Previous candidate this improves on, or null for a new idea."
     )

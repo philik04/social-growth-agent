@@ -4,7 +4,7 @@ A critique separates three things:
 - ``recommended_verdict`` and ``assessment``/``issues``: the model's subjective judgement.
 - ``policy_violations``: deterministic hard-rule failures found by application code.
 - ``verdict``: the final decision. Application code derives it; a hard violation
-  can never produce PASS, whatever the model recommended.
+  or an explicit ``unclear`` issue can never produce PASS, whatever the model recommended.
 """
 
 from enum import StrEnum

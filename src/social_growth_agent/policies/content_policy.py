@@ -13,8 +13,10 @@ from social_growth_agent.discovery.text import jaccard, token_set
 from social_growth_agent.models import (
     ContentCandidate,
     ContentIntent,
+    CritiqueIssue,
     CritiqueVerdict,
     HookType,
+    IssueCategory,
     PolicyViolation,
     PostFormat,
 )
@@ -260,9 +262,18 @@ def find_violations(
 
 
 def final_verdict(
-    recommended: CritiqueVerdict, violations: Sequence[PolicyViolation]
+    recommended: CritiqueVerdict,
+    violations: Sequence[PolicyViolation],
+    *,
+    issues: Sequence[CritiqueIssue] = (),
 ) -> CritiqueVerdict:
-    """Hard violations downgrade PASS to REVISE (fixable by regeneration); REJECT stays REJECT."""
-    if violations and recommended is CritiqueVerdict.PASS:
+    """Hard violations and explicit clarity failures prevent PASS; never upgrade REJECT.
+
+    Clarity is an LLM judgement, recorded as an existing ``unclear`` issue rather
+    than a hard policy violation. Code resolves a contradictory PASS recommendation
+    without pretending to measure reader comprehension or rewriting model history.
+    """
+    unclear = any(issue.category is IssueCategory.UNCLEAR for issue in issues)
+    if (violations or unclear) and recommended is CritiqueVerdict.PASS:
         return CritiqueVerdict.REVISE
     return recommended

@@ -2,7 +2,7 @@
 
 import pytest
 
-from social_growth_agent.agents import CandidateBatch, CriticReport
+from social_growth_agent.agents import CandidateBatch, CriticReport, IssueDraft
 from social_growth_agent.agents.fakes import fake_content
 from social_growth_agent.errors import (
     InvalidModelOutputError,
@@ -12,6 +12,7 @@ from social_growth_agent.errors import (
 from social_growth_agent.graph import RunConfig
 from social_growth_agent.models import (
     CritiqueVerdict,
+    IssueCategory,
     LLMCallOutcome,
     ReviewAction,
     ReviewDecision,
@@ -41,6 +42,34 @@ def test_successful_flow_pauses_for_human_review(account, strategy):
     assert {k.candidate_id for k in result.pending_review.critiques} == set(
         result.state.review.candidate_ids
     )
+
+
+def test_high_scoring_unclear_batch_stops_at_existing_generation_limit(account, strategy):
+    llm = make_llm(always(P))
+    base_critic = llm._handlers[CriticReport]
+
+    def unclear_critic(request):
+        report = base_critic(request)
+        assert isinstance(report, CriticReport)
+        for item in report.evaluations:
+            item.score = 0.99
+            item.issues = [
+                IssueDraft(
+                    category=IssueCategory.UNCLEAR,
+                    detail="No single main message is identifiable. Explain the takeaway.",
+                )
+            ]
+        return report
+
+    llm._handlers[CriticReport] = unclear_critic
+    result = make_service(llm).start_run(account, strategy, RunConfig(max_generation_attempts=1))
+
+    assert result.status is RunStatus.FAILED
+    assert result.pending_review is None
+    assert result.state.generation_attempts == 1
+    assert all(k.recommended_verdict is P and k.verdict is R for k in result.state.critiques)
+    assert all(k.assessment.score == 0.99 for k in result.state.critiques)
+    assert len(llm.calls) == 3  # research, content, critic; no extra clarity call or retry
 
 
 def test_one_passing_candidate_is_enough_for_review(account, strategy):

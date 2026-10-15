@@ -1,7 +1,14 @@
 import pytest
 
 from social_growth_agent.errors import InvalidReviewError
-from social_growth_agent.models import CandidateOrigin, CritiqueVerdict, PolicyViolation, PostFormat
+from social_growth_agent.models import (
+    CandidateOrigin,
+    CritiqueIssue,
+    CritiqueVerdict,
+    IssueCategory,
+    PolicyViolation,
+    PostFormat,
+)
 from social_growth_agent.policies import (
     ContentPolicy,
     CriticGate,
@@ -39,6 +46,18 @@ def test_blank_and_format_rules():
 )
 def test_final_verdict_never_passes_a_violation(recommended, violations, expected):
     assert final_verdict(recommended, violations) is expected
+
+
+@pytest.mark.parametrize("recommended", [P, R, X])
+@pytest.mark.parametrize("violations", [[], [V]])
+def test_explicit_unclear_issue_never_passes_or_upgrades_rejection(recommended, violations):
+    issues = [CritiqueIssue(category=IssueCategory.UNCLEAR, detail="The main point is missing.")]
+    assert final_verdict(recommended, violations, issues=issues) is (X if recommended is X else R)
+
+
+def test_clarity_rule_does_not_reclassify_every_soft_issue_as_a_failure():
+    issues = [CritiqueIssue(category=IssueCategory.OTHER, detail="Consider a shorter opening.")]
+    assert final_verdict(P, [], issues=issues) is P
 
 
 def test_gate_orders_reviewable_candidates_by_score():

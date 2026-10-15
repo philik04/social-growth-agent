@@ -2,17 +2,19 @@
 
 import pytest
 
+from social_growth_agent.agents import CriticReport, IssueDraft
 from social_growth_agent.agents.fakes import build_fake_llm
 from social_growth_agent.errors import InvalidReviewError
 from social_growth_agent.graph import Dependencies, RunConfig
 from social_growth_agent.models import (
     CandidateOrigin,
     CritiqueVerdict,
+    IssueCategory,
     ReviewAction,
     ReviewDecision,
     RunStatus,
 )
-from social_growth_agent.providers.mocks import MockResearchProvider
+from social_growth_agent.providers.mocks import MockResearchProvider, payload_list
 from social_growth_agent.services import WorkflowService
 from tests.conftest import FAST_RETRY, always, make_llm, make_service
 
@@ -115,3 +117,43 @@ def test_edit_rounds_are_bounded(account, strategy):
 
     with pytest.raises(InvalidReviewError, match="edit limit"):
         service.submit_review(paused.state.run_id, edit(original.id, "second edit"))
+
+
+def test_unclear_edit_cannot_be_approved_and_keeps_original_critique(account, strategy):
+    llm = make_llm(always(CritiqueVerdict.PASS))
+    base_critic = llm._handlers[CriticReport]
+
+    def clarity_critic(request):
+        report = base_critic(request)
+        assert isinstance(report, CriticReport)
+        for result, post in zip(
+            report.evaluations, payload_list(request, "candidates"), strict=True
+        ):
+            if post["origin"] == "human_edit":
+                result.issues.append(
+                    IssueDraft(
+                        category=IssueCategory.UNCLEAR,
+                        detail="No single main message is identifiable. The advice lacks a point.",
+                    )
+                )
+        return report
+
+    llm._handlers[CriticReport] = clarity_critic
+    service = make_service(llm)
+    paused = service.start_run(account, strategy)
+    original = paused.pending_review.candidates[0]
+    original_critique = paused.state.latest_critique(original.id)
+    after_edit = service.submit_review(paused.state.run_id, edit(original.id, "Specs. Choices."))
+    edited = after_edit.state.candidates[-1]
+
+    assert after_edit.status is RunStatus.AWAITING_REVIEW
+    assert after_edit.pending_review.rejected_edit.verdict is CritiqueVerdict.REVISE
+    assert after_edit.pending_review.rejected_edit.policy_violations == []
+    assert edited.id not in after_edit.state.review.candidate_ids
+    assert after_edit.state.latest_critique(original.id) == original_critique
+    assert after_edit.state.candidate(original.id) == original
+    assert edited.research_finding_ids == original.research_finding_ids
+    with pytest.raises(InvalidReviewError):
+        service.submit_review(paused.state.run_id, approve(edited.id))
+    approved = service.submit_review(paused.state.run_id, approve(original.id))
+    assert approved.status is RunStatus.APPROVED

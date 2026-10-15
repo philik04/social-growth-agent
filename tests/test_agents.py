@@ -10,6 +10,7 @@ from social_growth_agent.agents import (
     CriticReport,
     FindingDraft,
     GenerationContext,
+    IssueDraft,
     OpportunityDraft,
     ResearchAgent,
     ResearchReport,
@@ -23,6 +24,7 @@ from social_growth_agent.models import (
     ContentCandidate,
     CritiqueVerdict,
     HookType,
+    IssueCategory,
     PostFormat,
     ResearchFinding,
 )
@@ -30,7 +32,7 @@ from social_growth_agent.policies import ContentPolicy
 from social_growth_agent.policies.research_policy import small_sample_limitation
 from social_growth_agent.providers import LLMSettings
 from social_growth_agent.providers.mocks import MockResearchProvider, ScriptedLLMProvider
-from tests.conftest import always, make_critique, research_material, scripted_critic
+from tests.conftest import always, evaluation, make_critique, research_material, scripted_critic
 
 
 def candidate(
@@ -306,3 +308,77 @@ def test_fake_critic_flags_unsupported_claims(strategy):
         .critiques
     )
     assert [c.verdict for c in critiques] == [CritiqueVerdict.REVISE, CritiqueVerdict.PASS]
+
+
+@pytest.mark.parametrize(
+    ("audience", "text"),
+    [
+        (
+            "AI engineers",
+            "LFM2.5-24B-A2B: 24B total parameters, 2B active per token. Choose a harness.",
+        ),
+        ("Fashion enthusiasts", "Volume. Proportions. Now choose."),
+        ("Film enthusiasts", "Framing. Pacing. Now choose."),
+    ],
+)
+def test_explicit_clarity_failure_overrides_high_score_in_any_domain(strategy, audience, text):
+    post = candidate(text).model_copy(update={"target_audience": audience})
+    audience_strategy = strategy.model_copy(update={"target_audience": audience})
+    issue = IssueDraft(
+        category=IssueCategory.UNCLEAR,
+        detail="No single main message is identifiable. The list does not explain "
+        "what the reader is being asked to decide.",
+    )
+    model_evaluation = evaluation(post.id, CritiqueVerdict.PASS, score=0.99).model_copy(
+        update={"issues": [issue]}
+    )
+    llm = ScriptedLLMProvider(
+        {CriticReport: lambda _r: CriticReport(evaluations=[model_evaluation])}
+    )
+    [critique] = CriticAgent(llm).run(audience_strategy, [post], ContentPolicy()).critiques
+
+    assert critique.recommended_verdict is CritiqueVerdict.PASS
+    assert critique.assessment.score == 0.99
+    assert critique.assessment.factual_risk == "low"
+    assert critique.verdict is CritiqueVerdict.REVISE
+    assert critique.policy_violations == []  # a soft judgement, not an invented hard violation
+    assert critique.issues[0].detail == issue.detail
+    assert critique.suggested_revision is not None
+    assert llm.calls[0].payload["strategy"]["target_audience"] == audience
+    assert llm.calls[0].payload["candidates"][0]["target_audience"] == audience
+    assert len(llm.calls) == 1
+
+
+def test_clear_technical_post_passes_without_an_extra_clarity_call(strategy):
+    post = candidate(
+        "When evaluating a local AI agent, run a representative task and inspect its tool calls. "
+        "That tests whether the agent can complete your workflow."
+    ).model_copy(update={"hook_type": HookType.HOW_TO, "target_audience": "AI engineers"})
+    audience_strategy = strategy.model_copy(update={"target_audience": "AI engineers"})
+    model_evaluation = evaluation(post.id, CritiqueVerdict.PASS, score=0.88)
+    llm = ScriptedLLMProvider(
+        {CriticReport: lambda _r: CriticReport(evaluations=[model_evaluation])}
+    )
+
+    [critique] = CriticAgent(llm).run(audience_strategy, [post], ContentPolicy()).critiques
+
+    assert critique.passed
+    assert critique.issues == [] and critique.policy_violations == []
+    assert critique.suggested_revision is None
+    assert len(llm.calls) == 1 and llm.calls[0].task == "critic.review"
+
+
+def test_clarity_fallback_preserves_a_model_supplied_revision(strategy):
+    model_evaluation = evaluation("cand_1", CritiqueVerdict.REVISE).model_copy(
+        update={
+            "issues": [IssueDraft(category=IssueCategory.UNCLEAR, detail="The point is buried.")],
+            "suggested_revision": "Explain which decision the comparison helps readers make.",
+        }
+    )
+    llm = ScriptedLLMProvider(
+        {CriticReport: lambda _r: CriticReport(evaluations=[model_evaluation])}
+    )
+    [critique] = (
+        CriticAgent(llm).run(strategy, [candidate("Short text")], ContentPolicy()).critiques
+    )
+    assert critique.suggested_revision == model_evaluation.suggested_revision

@@ -17,7 +17,7 @@ Return a CandidateBatch with one entry per candidate:
 - `content`: the exact post text.
 - `topic`, `hook_type`, `format`, `target_audience`.
 - `research_finding_ids`: ids of the findings the post is based on (at least one, only from the supplied findings).
-- `rationale`: one or two sentences on why this post should work for this audience.
+- `rationale`: first state the post's main message in one simple sentence; then explain why the target audience can understand that message immediately and why it is useful to them. This is review metadata, not part of the post.
 - `revises_candidate_id`: on retries, the id of the previous candidate this post improves on, or null for a fresh idea.
 
 # Rules
@@ -29,6 +29,13 @@ Return a CandidateBatch with one entry per candidate:
 - When `reviewer_notes` are present, a human reviewer rejected the previous candidates and asked for changes (for example "shorter", "more technical", "less promotional"). Follow every note unless it conflicts with the content policy or the strategy's topics to avoid; the policy and the avoided topics always win.
 - When the policy sets `required_hook_type` or `min_post_length`, the run is part of an experiment: these are hard rules, enforced by the application like the maximum length. Every candidate must declare exactly `required_hook_type` as its `hook_type` and genuinely open with that kind of hook, and its length must lie between `min_post_length` and `max_post_length`. Reviewer notes and strategy preferences never override them.
 - `preferred_hooks` and `length_guidance` are soft preferences: favour them, but never exceed the content policy's maximum length, and reviewer notes take precedence over them.
+
+# Main-message clarity
+- Choose one main point before writing. The reader should understand what the post says and why it matters on the first reading, without needing the rationale or the linked article to explain the point.
+- Use language appropriate to the supplied target audience in any domain. Keep necessary specialist terms, but explain unfamiliar terms or distinctions briefly when the point depends on them. A list of names, numbers or specifications needs an understandable takeaway.
+- Make advice concrete: say what to try, inspect or compare. Make a discussion question specific enough that a reader knows which decision or trade-off to discuss.
+- The first sentence of `rationale` must paraphrase the actual post in plain language. If that sentence needs a claim or explanation absent from the post, revise the post rather than using the rationale to fill the gap.
+- Improve clarity without adding unsupported benefits, removing important qualifications, dropping factual attribution, or changing the declared hook to something the text does not deliver.
 
 # Content intents and mentions (Phase 9)
 When the policy sets `content_intent`, every candidate serves that intent; the application records it, you do not choose it:
