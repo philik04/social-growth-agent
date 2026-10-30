@@ -583,6 +583,23 @@ api  ->  services  ->  graph  ->  agents  ->  providers (protocols)
 
 - `evaluation/critic_eval.py` scores final critic verdicts (model plus policy) against labelled
   cases. With real models it is the regression gate for prompt and model changes.
+  Ground truth is each case's supplied `expected` final verdict (`pass`, `revise`, or
+  `reject`), not a separate policy-compliance annotation. For each verdict, TP counts
+  expected = actual = verdict; FP counts actual = verdict with a different expected
+  label; FN counts expected = verdict with a different actual label. Precision is
+  TP / (TP + FP), and recall is TP / (TP + FN). A zero denominator yields `None`
+  in Python and `null` in JSON; a defined rate with no true positives is `0.0`.
+  Reports add derived `per_verdict` entries for all three labels, each containing
+  `true_positives`, `false_positives`, `false_negatives`, `precision`, and `recall`.
+  The additive `false_pass_count` is the PASS FP count: expected `revise` or `reject`
+  with final actual `pass`. It measures disagreement with labels, not proof of a
+  policy violation. Metrics use final verdicts after all policy and clarity vetoes.
+  Existing `total`, `correct`, sparse `confusion` (`expected->actual` keys), and the
+  `accuracy` property retain their behavior, including legacy empty accuracy `0.0`.
+  The new metrics are computed on access and serialization, so historical report
+  payloads still load without new required input fields and cannot supply stale
+  metric values. JSON consumers must tolerate the two additive report keys;
+  `accuracy` remains a Python property rather than a serialized field.
 - Every node appends a `NodeEvent`, every research retrieval appends a `ResearchFetch`, and
   every LLM call appends an `LLMCall` (success or failure,
   latency, tokens). `services/trace.TracePrinter` renders both as a readable run trace. Structured
