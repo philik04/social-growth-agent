@@ -1,85 +1,97 @@
-# social-growth-agent
+# Social Growth Agent
 
-An agentic orchestration system that grows a creator's or founder's presence on X by running a
-closed loop: **research → generate → critique → human approval → publish → analyze → update strategy**.
+A stateful Python system for researching, drafting and reviewing content for X,
+with separate publishing, analytics and strategy-review services.
 
-> Status: **Phase 9, content discovery.** On-demand, bounded discovery sessions read
-> official feeds, arXiv, GitHub releases, Hacker News and X search with provenance, and
-> rank topics deterministically with their reasons; an audience shortlist suggests where to
-> read, never what to automate. A chosen topic starts a normal run that replays the stored
-> evidence. Facts are attributed, corroboration means the same claim in two independent
-> primary sources, and any `@mention`, including the occasional `@grok` question, is
-> manual-only: you export it, post it yourself and register the post so it is measured.
-> Deleted and expired third-party text is purged everywhere
-> ([docs/CONTENT_DISCOVERY.md](docs/CONTENT_DISCOVERY.md), [docs/API.md](docs/API.md)).
->
-> Phase 8: pre-registered A/B experiments randomize each new run
-> to one hook type or length range (permuted blocks, enforced as a hard content rule) and
-> compare the published posts at one age-matched snapshot with a bootstrap interval. Outcomes
-> stay masked until the experiment concludes; looking early is an explicit, irreversible
-> unblinding that makes the result exploratory. A confirmatory result on real data can be
-> adopted (review token) into an inactive strategy version, activated in the usual separate
-> step. Synthetic results are never adoptable ([docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)).
->
-> Phase 7: deterministic, age-matched evaluations describe
-> how published posts performed by hook, length, posting hour and strategy version, with
-> explicit evidence levels, excluded posts and their reasons, and no causal claims. An
-> opt-in Strategy Agent may propose changes to two soft preferences (preferred hooks and
-> length guidance), each citing the evaluation; a human approves it (review token) into a new
-> inactive version and activates it in a separate step. Nothing changes or publishes on its
-> own ([docs/STRATEGY_EVALUATION.md](docs/STRATEGY_EVALUATION.md)). Published posts get
-> public-metric snapshots at fixed ages (1h, 24h, 72h by default), each joined back to the
-> research, critique, approval and strategy that produced it
-> ([docs/ANALYTICS.md](docs/ANALYTICS.md)). Approved content can be published to
-> X, as a separate explicit request: one durable publication intent, a lease-based worker that makes exactly
-> one platform call per attempt, scheduling, and an explicit `unknown` state for outcomes X
-> cannot confirm (never retried on its own). Runs live in PostgreSQL and survive process
-> restarts; a REST API starts runs, lists pending reviews and takes approve / reject / edit /
-> regenerate-with-notes decisions. Research can run on live X posts (opt-in); every finding
-> cites the X post ids that support it, checked in code and by database constraints. Usage is
-> recorded per call and priced as labelled estimates from a config file. See
-> [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/PUBLISHING.md](docs/PUBLISHING.md).
+**Python 3.12+ · LangGraph · FastAPI · PostgreSQL · Pydantic**
 
-## Why this is more than a multi-agent chatbot
+**Portfolio focus:** LLM application engineering with typed contracts, bounded
+revisions, durable state and explicit human control over external side effects.
+Research evidence, candidates, critiques, approvals and later metrics remain
+traceable. Synthetic demonstrations establish workflow behavior; they do not
+measure real audience or engagement growth.
 
-Most "multi-agent" demos chain prompts and hope. This project treats content generation as a
-**stateful, auditable workflow**:
+## Review in two minutes
 
-- **Graph, not a chain.** A LangGraph state machine with conditional routing and bounded loops.
-  The critic can send drafts back for regeneration, but only `max_generation_attempts` times.
-- **Typed state and typed agent contracts.** Every node reads and writes a validated Pydantic
-  state. Agents return structured objects (`Critique{verdict, score, risks, issues}`), not prose.
-  Output that breaks its contract fails the run loudly instead of leaking downstream.
-- **LLMs judge, code decides.** The critic's LLM recommends. Deterministic policy
-  (`ContentPolicy`, e.g. max 280 characters) has the final word, and a policy object
-  (`CriticGate`) decides whether the batch may go to a human. The model never picks the next node.
-- **Human in the loop by design.** The graph genuinely pauses before publication (`interrupt()`
-  plus a checkpointer) and resumes with an approve / reject / edit / regenerate decision. A human
-  edit is a new candidate that must pass critique again before it can be approved.
-- **Retries where they belong.** Transient provider failures are retried by a node retry
-  policy. Contract violations are not retried; they are recorded and routed to a failure state.
-- **Traceability.** Every candidate records the run, attempt, strategy version and research
-  findings behind it, and every critique points at its candidate. This chain will extend through
-  approval, publishing and metrics, which is what makes the learning loop measurable.
-- **Swappable edges.** LLMs and social platforms sit behind small protocols. Mocks make the
-  whole engine testable without credentials, and a real adapter is one new class.
-- **Evaluation from day one.** A critic evaluation harness already exists, so model or prompt
-  changes can be gated on agreement with labelled cases.
+| Explore | Evidence |
+| --- | --- |
+| Run the credential-free demo | [Quickstart](#quickstart): fake agents, mock research and in-memory checkpoints |
+| Inspect workflow control | [Graph construction](src/social_growth_agent/graph/builder.py), [routing](src/social_growth_agent/graph/routing.py) and [architecture](docs/ARCHITECTURE.md) |
+| Review policy boundaries | [Content rules](src/social_growth_agent/policies/content_policy.py), [critic gate](src/social_growth_agent/policies/critic_gate.py) and [publication policy](src/social_growth_agent/policies/publishing.py) |
+| Follow persistence and side effects | [Database design](docs/DATABASE.md), [publishing](docs/PUBLISHING.md) and [analytics lineage](docs/ANALYTICS.md) |
+| Assess evaluation and testing | [Critic evaluation harness](src/social_growth_agent/evaluation/critic_eval.py), [tests](tests) and [CI workflow](.github/workflows/ci.yml) |
+
+## Engineering highlights
+
+- **Typed agent contracts.** Pydantic validates workflow state and structured
+  research, content and critique results before they move downstream.
+- **Deterministic control.** Code owns graph routing, hard content rules, retry
+  policy and revision budgets. The critic recommends; policy determines whether
+  a candidate can reach review.
+- **Explicit review boundaries.** The graph pauses at human review. Edits create
+  new candidates and require a new critique; approval alone never publishes.
+- **Durable publication.** A separate intent and lease-based worker handle
+  publishing. Ambiguous outcomes become `unknown` and require human resolution;
+  exactly-once delivery is not guaranteed. All mentions are manual-only.
+- **Evidence and reviewed learning.** [Discovery](docs/CONTENT_DISCOVERY.md) ranks
+  stored evidence; [strategy evaluation](docs/STRATEGY_EVALUATION.md) describes
+  age-matched outcomes. A reviewed proposal creates an inactive strategy version;
+  activation is separate. [Experiments](docs/EXPERIMENTS.md) preserve preregistration
+  and masked outcomes, and synthetic results cannot be adopted.
+- **Testable external boundaries.** Provider protocols, deterministic fakes, mock
+  transports and a labelled critic-evaluation harness support checks without
+  paid model calls or live X activity.
+
+This is a local, operator-facing portfolio system. Core API routes lack general
+authentication; keep them bound to localhost. Retention redacts source evidence
+and checkpoints; derived findings, drafts and backups need separate review.
+See [operational boundaries](docs/CODEX_HANDOFF.md#security-configuration-and-known-limitations)
+and the [controlled pilot guide](docs/CONTROLLED_PILOT.md) before live use.
+Development history and phase details are in the [roadmap](docs/ROADMAP.md).
 
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
 
+Use a fresh checkout without a `.env` file for this offline walkthrough:
+
 ```bash
-uv sync
-cp .env.example .env                                 # optional; never commit real keys
-uv run python -m social_growth_agent.services.demo   # deterministic fake agents, no key needed
-uv run pytest                                        # tests
-uv run ruff check . && uv run ruff format --check .  # lint + format
-uv run mypy                                          # strict type check
+uv sync --locked
+uv run python -m social_growth_agent.services.demo
 ```
 
+The demo injects fake agents and mock research, revises synthetic drafts,
+pauses at review, then supplies a scripted approval decision. It uses in-memory
+checkpoints, requires no database or API key, and publishes nothing.
+
+Expected progression (candidate IDs and draft text vary):
+
+```text
+attempt 1 → critic: revise (unsupported_claim)
+attempt 2 → critic: pass → awaiting_review
+scripted demo approval → approved
+```
+
+For verification without database or live tests:
+
+```bash
+uv run pytest -m "not db and not live" --ignore=tests/db --ignore=tests/live
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+```
+
+In an existing configured checkout, use the
+[isolated offline runner](docs/CODEX_HANDOFF.md#verification-and-next-steps) to
+disable `.env` loading. Full PostgreSQL checks and offline database demos are
+separate from this in-memory walkthrough.
+
 ### Persistent API (PostgreSQL)
+
+The operator examples below create database state. Use a disposable environment
+for demonstrations and tests; follow the [database guide](docs/DATABASE.md) and
+keep the API bound to `127.0.0.1`. Database tests require an explicitly authorized
+disposable PostgreSQL server with `CREATEDB`; never point them at real account data.
 
 ```bash
 docker compose up -d                                   # PostgreSQL 16 on 127.0.0.1:5433
