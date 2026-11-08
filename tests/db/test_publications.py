@@ -209,8 +209,9 @@ def test_a_scheduled_publication_is_stored_as_utc_and_stays_scheduled(
     runtime = make_runtime()
     client = client_for(runtime)
     run_id, candidate_id = approved_run(client, run_payload)
-    # 10:30 in a +02:00 zone is 08:30 UTC.
-    local = datetime(2026, 11, 2, 10, 30, tzinfo=timezone(timedelta(hours=2)))
+    # Keep the schedule in the future while exercising a non-UTC offset.
+    expected_utc = datetime.now(UTC) + timedelta(hours=1)
+    local = expected_utc.astimezone(timezone(timedelta(hours=2)))
 
     body = request_publish(client, run_id, candidate_id, scheduled_for=local.isoformat())
 
@@ -220,7 +221,7 @@ def test_a_scheduled_publication_is_stored_as_utc_and_stays_scheduled(
         "SELECT scheduled_for FROM publications WHERE id = :id",
         id=body["id"],
     )
-    assert stored.astimezone(UTC) == datetime(2026, 11, 2, 8, 30, tzinfo=UTC)
+    assert stored.astimezone(UTC) == expected_utc
     assert client.get(f"/publications/{body['id']}").json()["status"] == "scheduled"
 
 
